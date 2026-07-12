@@ -38,40 +38,64 @@ export function useAudioRecorder() {
   const startedAtRef = useRef<number | null>(null);
   const accumulatedMsRef = useRef(0);
 
-  const handleSourceError = useCallback((error: Error) => {
-    setErrorMessage(error.message);
-    dispatch({ type: "ERROR" });
-    sourceRef.current?.dispose();
-    sourceRef.current = null;
-    setMediaStream(null);
+  /**
+   * Folds the currently-running segment (if any) into accumulatedMsRef
+   * and returns the new total. Called synchronously from pause(), stop(),
+   * and handleSourceError() — never from a useEffect keyed on `status`.
+   *
+   * An earlier version of this hook finalized the accumulated time from
+   * an effect that watched `status === "paused"`. That worked for the
+   * common case, but effects run asynchronously after a commit: a user
+   * (or a fast script) pausing and then immediately stopping — or
+   * resuming and then immediately stopping — could call stop() before
+   * that effect had run, silently dropping the last segment's time from
+   * the recorded duration. Computing the fold-in synchronously, at the
+   * moment each action actually happens, removes that whole class of
+   * timing bug rather than narrowing the window.
+   */
+  const finalizeElapsed = useCallback((): number => {
+    if (startedAtRef.current !== null) {
+      accumulatedMsRef.current += Date.now() - startedAtRef.current;
+      startedAtRef.current = null;
+    }
+    return accumulatedMsRef.current;
   }, []);
 
-  // Timer: same timestamp-based approach as Sprint 2.1, now driven by
-  // real recording state instead of a mock.
+  const handleSourceError = useCallback(
+    (error: Error) => {
+      // Freeze the timer at the exact moment of failure, rather than
+      // leaving it to whatever the last periodic tick happened to show
+      // (which could be up to TICK_INTERVAL_MS stale).
+      setElapsedMs(finalizeElapsed());
+      setErrorMessage(error.message);
+      dispatch({ type: "ERROR" });
+      sourceRef.current?.dispose();
+      sourceRef.current = null;
+      setMediaStream(null);
+    },
+    [finalizeElapsed]
+  );
+
+  // Timer display: ticks every TICK_INTERVAL_MS while recording, but
+  // always computes elapsed as (accumulated + time since this segment
+  // started) rather than incrementing a counter per tick. That matters
+  // if the browser throttles or delays setInterval — which it routinely
+  // does for background/inactive tabs — because the next tick that does
+  // fire still lands on the correct value instead of having drifted.
+  //
+  // startedAtRef is set synchronously by record() and resume() (not
+  // lazily here) — see finalizeElapsed's comment for why relying on
+  // effect timing was the wrong place for that.
   useEffect(() => {
     if (status !== "recording") return;
 
-    if (startedAtRef.current === null) {
-      startedAtRef.current = Date.now();
-    }
-
     const interval = setInterval(() => {
-      setElapsedMs(accumulatedMsRef.current + (Date.now() - startedAtRef.current!));
+      if (startedAtRef.current === null) return; // shouldn't happen; defensive only
+      const elapsed = accumulatedMsRef.current + (Date.now() - startedAtRef.current);
+      setElapsedMs(Math.max(0, elapsed));
     }, TICK_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [status]);
-
-  // Freeze the clock on pause by folding the running segment into the
-  // accumulated total. (The "stopped" case is finalized synchronously
-  // inside stop() below, since that path needs an accurate value
-  // immediately for the artifact — it can't wait for this effect.)
-  useEffect(() => {
-    if (status === "paused" && startedAtRef.current !== null) {
-      accumulatedMsRef.current += Date.now() - startedAtRef.current;
-      startedAtRef.current = null;
-      setElapsedMs(accumulatedMsRef.current);
-    }
   }, [status]);
 
   // Release the microphone and any object URL on unmount, so navigating
@@ -109,6 +133,10 @@ export function useAudioRecorder() {
       sourceRef.current = source;
       await source.start();
       setMediaStream(stream);
+      // Set synchronously, at the exact moment recording actually
+      // starts, rather than lazily from the tick effect — see
+      // finalizeElapsed's comment for why that timing matters.
+      startedAtRef.current = Date.now();
       dispatch({ type: "PERMISSION_GRANTED" });
     } catch (err) {
       // Clean up anything partially acquired so the mic indicator
@@ -126,11 +154,16 @@ export function useAudioRecorder() {
 
   const pause = useCallback(() => {
     sourceRef.current?.pause();
+    const finalMs = finalizeElapsed();
+    setElapsedMs(finalMs);
     dispatch({ type: "PAUSE" });
-  }, []);
+  }, [finalizeElapsed]);
 
   const resume = useCallback(() => {
     sourceRef.current?.resume();
+    // Set synchronously — same reasoning as record(): this is the exact
+    // moment the current segment starts, so it can't wait for an effect.
+    startedAtRef.current = Date.now();
     dispatch({ type: "RESUME" });
   }, []);
 
@@ -138,15 +171,9 @@ export function useAudioRecorder() {
     const source = sourceRef.current;
     if (!source) return;
 
-    // Finalize elapsed time here rather than relying on the pause/stop
-    // effect above — the artifact needs an accurate duration
-    // synchronously, before that effect has a chance to run.
-    let finalElapsedMs = accumulatedMsRef.current;
-    if (startedAtRef.current !== null) {
-      finalElapsedMs += Date.now() - startedAtRef.current;
-    }
-    accumulatedMsRef.current = finalElapsedMs;
-    startedAtRef.current = null;
+    // The artifact needs an accurate duration synchronously, so finalize
+    // here rather than deferring to an effect.
+    const finalElapsedMs = finalizeElapsed();
     setElapsedMs(finalElapsedMs);
 
     try {
@@ -170,7 +197,7 @@ export function useAudioRecorder() {
       sourceRef.current = null;
       setMediaStream(null);
     }
-  }, []);
+  }, [finalizeElapsed]);
 
   const reset = useCallback(() => {
     sourceRef.current?.dispose();
