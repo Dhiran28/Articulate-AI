@@ -4,8 +4,8 @@ import { Button } from "@/components/ui/button";
 
 /**
  * Landing page. Minimal by design — its only job right now is to get a
- * visitor to the Practice screen, which is where Sprint 2.1's actual
- * work lives.
+ * visitor to the Practice screen, where the actual recording feature
+ * lives.
  */
 export default function Home() {
   return (

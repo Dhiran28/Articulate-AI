@@ -1,11 +1,16 @@
 /**
- * Recording states for the Practice screen.
- *
- * Sprint 2.1 only used idle/recording/paused/stopped, since there was no
- * real microphone access that could be pending or fail. Now that Sprint
- * 2.2 wires up getUserMedia and MediaRecorder, `requesting_permission`
- * and `error` are real, reachable states — matching the full machine
+ * Recording states for the Practice screen, matching the state machine
  * described in docs/decisions/001-audio-recording-module-architecture.md.
+ * The transitions between them live in state/recordingMachine.ts.
+ *
+ * Note on where other module types live: this file holds the shared
+ * domain shapes (this and RecordingArtifact, below) that are referenced
+ * across many files. Types that are tightly coupled to one specific
+ * piece of logic — AudioSource in lib/audioSource.ts, RecordingSink in
+ * lib/recordingSink.ts, WaveformSource in lib/waveformSource.ts,
+ * MicrophoneError in lib/microphoneError.ts — are defined alongside that
+ * logic instead, so the interface and its only (or primary)
+ * implementation stay in the same place.
  */
 export type RecordingStatus =
   | "idle"

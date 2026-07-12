@@ -13,23 +13,22 @@ export type RecordingMachineAction =
 /**
  * The full recording state machine described in ADR 001.
  *
- * Sprint 2.1 used a smaller subset (idle/recording/paused/stopped)
- * because there was no real microphone access that could fail.
- * `requesting_permission` and `error` are real, reachable states now
- * that getUserMedia and MediaRecorder are involved — not speculative
- * ones added ahead of need.
+ * Every transition here corresponds to something that can actually
+ * happen with real microphone access: requesting permission can be
+ * pending (`requesting_permission`) or fail (`error`) before recording
+ * ever starts, not just succeed immediately.
  *
- * As in Sprint 2.1, invalid transitions are ignored rather than thrown:
- * the UI disables the relevant control for each case, so this is a
- * second line of defense.
+ * Invalid transitions are ignored rather than thrown: the UI disables
+ * the relevant control for each case (see RecordingControls), so this
+ * reducer is a second line of defense, not the primary guard.
  *
  * PERMISSION_DENIED covers any failure to start recording — permission
  * refused, no microphone found, the device already in use, and so on —
- * not literally only the user clicking "Block". Sprint 2.6's
- * lib/microphoneError.ts is what tells those cases apart for the
- * message shown to the user; this state machine only needs to know
- * "starting failed," since idle/stopped/error all recover the same way
- * (Record is enabled again to retry).
+ * not literally only the user clicking "Block". lib/microphoneError.ts
+ * is what tells those cases apart for the message shown to the user;
+ * this state machine only needs to know "starting failed," since
+ * idle/stopped/error all recover the same way (Record is enabled again
+ * to retry).
  */
 export function recordingMachineReducer(
   status: RecordingStatus,

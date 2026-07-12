@@ -13,6 +13,14 @@ interface PlaybackPanelProps {
   onDelete: () => void;
 }
 
+// Note (found during the Sprint 2.7 review, deliberately left as-is):
+// this doesn't zero-pad minutes or expand past an hour the way
+// RecordingTimer's formatElapsed does — "0:05" here vs. "00:05" there
+// for the same five seconds. That's drift from being written
+// independently, not an intentional distinction, but changing it would
+// change what's rendered on screen, which is out of scope for a
+// review pass that isn't supposed to alter functionality. Worth
+// unifying into one shared formatter in a future sprint.
 function formatDuration(ms: number): string {
   const totalSeconds = Math.round(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);

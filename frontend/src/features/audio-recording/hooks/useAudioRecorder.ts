@@ -6,27 +6,57 @@ import { BrowserMediaRecorderSource, type AudioSource } from "../lib/audioSource
 import { checkBrowserSupport, classifyMicrophoneError, type MicrophoneError } from "../lib/microphoneError";
 import { LocalObjectUrlSink } from "../lib/recordingSink";
 import { recordingMachineReducer } from "../state/recordingMachine";
-import type { RecordingArtifact } from "../types";
+import type { RecordingArtifact, RecordingStatus } from "../types";
 
 const TICK_INTERVAL_MS = 250;
 
 /**
- * Owns real browser audio capture for the Practice screen: requests
- * microphone access, drives a MediaRecorder through an AudioSource, and
- * hands the finished recording to a RecordingSink.
- *
- * This replaces Sprint 2.1's useRecordingUIState outright — that hook's
- * header comment said as much. The two expose a near-identical surface
- * ({ status, elapsedMs, record, pause, resume, stop, reset }); this one
- * additionally exposes `artifact` (the finished Blob + metadata),
- * `playbackUrl` (an object URL for that same artifact, for playback),
- * `mediaStream` (the live microphone stream while a session is open, for
- * Sprint 2.4's waveform to tap independently — see useWaveform),
- * `browserSupport` (Sprint 2.6: set once, client-side only, if this
- * browser or connection can't record at all), and `errorMessage`, none
- * of which exist without real capture involved.
+ * The full public contract of useAudioRecorder — everything the Practice
+ * screen (or any future consumer) can read or call.
  */
-export function useAudioRecorder() {
+export interface UseAudioRecorderResult {
+  status: RecordingStatus;
+  /** Milliseconds recorded so far, excluding any paused time. */
+  elapsedMs: number;
+  /** The finished recording once stop() resolves, until the next record() or reset(). */
+  artifact: RecordingArtifact | null;
+  /** A ready-to-play object URL for `artifact`, or null when there isn't one. */
+  playbackUrl: string | null;
+  /** The live microphone stream while a session is open (recording or paused), for a waveform or similar to tap independently. */
+  mediaStream: MediaStream | null;
+  /** Set once, after mount, if this browser or connection can't record at all — see lib/microphoneError.ts. */
+  browserSupport: MicrophoneError | null;
+  /** A friendly, user-facing description of the most recent failure, or null. */
+  errorMessage: string | null;
+  record: () => Promise<void>;
+  pause: () => void;
+  resume: () => void;
+  stop: () => Promise<void>;
+  reset: () => void;
+}
+
+/**
+ * Owns real browser audio capture for the Practice screen.
+ *
+ * record() requests microphone access, wraps the resulting MediaStream
+ * in an AudioSource (BrowserMediaRecorderSource — see lib/audioSource.ts)
+ * to drive an actual MediaRecorder, and tracks status and elapsed time
+ * through pause/resume/stop. stop() hands the finished recording to a
+ * RecordingSink (lib/recordingSink.ts) and exposes it as both `artifact`
+ * (the Blob and its metadata) and `playbackUrl` (a ready-to-play object
+ * URL).
+ *
+ * `mediaStream` is exposed separately from the recording pipeline itself
+ * so a live waveform (useWaveform) can read the same microphone in
+ * parallel, without needing to know anything about MediaRecorder.
+ * `browserSupport` is checked once after mount for browsers or
+ * connections that can't record at all — see the effect below for why
+ * that check can't happen inline during render. `errorMessage` covers
+ * everything else that can go wrong starting or finishing a recording,
+ * classified into friendly, specific copy by lib/microphoneError.ts
+ * rather than shown as a raw browser error.
+ */
+export function useAudioRecorder(): UseAudioRecorderResult {
   const [status, dispatch] = useReducer(recordingMachineReducer, "idle");
   const [elapsedMs, setElapsedMs] = useState(0);
   const [artifact, setArtifact] = useState<RecordingArtifact | null>(null);
@@ -87,12 +117,13 @@ export function useAudioRecorder() {
   // window/navigator, which don't exist during Next.js's server-rendered
   // pass; if the *client's* first render produced a different result
   // than the (window-less) server render, React would treat it as a
-  // hydration mismatch — the same class of bug fixed in Sprint 2.2 for
-  // the waveform's bar heights. Starting from `null` (assume supported)
-  // on both the server and the client's initial render, then correcting
-  // it here after mount, avoids that: there's a brief window where an
-  // actually-unsupported browser still shows the normal recording UI,
-  // but it resolves within the same tick, before a user could act on it.
+  // hydration mismatch — the same class of bug that shows up in any
+  // client-only computation done during render instead of after mount.
+  // Starting from `null` (assume supported) on both the server and the
+  // client's initial render, then correcting it here after mount, avoids
+  // that: there's a brief window where an actually-unsupported browser
+  // still shows the normal recording UI, but it resolves within the same
+  // tick, before a user could act on it.
   useEffect(() => {
     setBrowserSupport(checkBrowserSupport());
   }, []);

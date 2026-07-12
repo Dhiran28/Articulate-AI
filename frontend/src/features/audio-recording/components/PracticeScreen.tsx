@@ -11,33 +11,28 @@ import { UnsupportedBrowserNotice } from "./UnsupportedBrowserNotice";
 import { WaveformVisualizer } from "./WaveformVisualizer";
 
 /**
- * Composes the Practice screen and owns the one hook that drives it.
+ * Composes the Practice screen from a single hook, useAudioRecorder,
+ * with state passed down as plain props (see that hook for why: no
+ * Context, no global store — this is one screen with a shallow tree).
+ * Nothing here talks to the microphone or MediaRecorder directly; that
+ * detail lives entirely behind the hook, per ADR 001's layering.
  *
- * As of Sprint 2.2 this uses the real `useAudioRecorder` hook (browser
- * microphone capture via MediaRecorder) instead of Sprint 2.1's
- * `useRecordingUIState` mock. The component tree and prop-drilling
- * approach underneath are unchanged — being able to swap the hook
- * without touching this file or any of its children was the entire
- * point of designing it behind one interface in ADR 001.
+ * Content within the card is gated by three conditions, checked in
+ * order of how fundamental they are:
  *
- * As of Sprint 2.3, the screen shows one of two mutually exclusive
- * views: the transport controls (record/pause/resume/stop) while a
- * recording is idle or in progress, or the playback panel
- * (play/record again/delete) once a recording exists. Showing both at
- * once would give two different ways to "start over" (Record vs. Record
- * Again) at the same time, which is confusing rather than flexible.
- *
- * As of Sprint 2.4, the waveform is real: WaveformVisualizer reads the
- * hook's `mediaStream` directly rather than just `status`, since it
- * needs the live stream to visualize, not just to know what state
- * recording is in.
- *
- * As of Sprint 2.6, `browserSupport` gates everything else: if it's set
- * (unsupported browser, or an insecure connection), the whole recording
- * UI — status badge, waveform, timer, controls — is replaced by
- * UnsupportedBrowserNotice. None of those controls would work anyway,
- * and showing them disabled with an error underneath would look broken
- * rather than explain what's actually going on.
+ * 1. `browserSupport` — if the browser or connection can't record at
+ *    all, everything else (status badge, waveform, timer, controls) is
+ *    replaced by UnsupportedBrowserNotice. None of those controls would
+ *    work anyway, and showing them disabled with an error underneath
+ *    would look broken rather than explain what's going on.
+ * 2. `hasFinishedRecording` — once a take exists, the transport controls
+ *    (record/pause/resume/stop) are replaced by PlaybackPanel
+ *    (play/record again/delete). The two are never shown together:
+ *    Record and Record Again would otherwise be two different ways to
+ *    do the same thing at the same time.
+ * 3. Otherwise, the normal recording controls and live waveform are
+ *    shown, driven directly by the hook's `status`, `elapsedMs`, and
+ *    `mediaStream`.
  */
 export function PracticeScreen() {
   const {

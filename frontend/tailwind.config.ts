@@ -57,15 +57,6 @@ export default {
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
       },
-      keyframes: {
-        "waveform-pulse": {
-          "0%, 100%": { transform: "scaleY(0.4)" },
-          "50%": { transform: "scaleY(1)" },
-        },
-      },
-      animation: {
-        "waveform-pulse": "waveform-pulse 0.9s ease-in-out infinite",
-      },
     },
   },
   plugins: [],

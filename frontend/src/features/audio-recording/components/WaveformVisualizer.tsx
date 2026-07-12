@@ -14,7 +14,7 @@ interface WaveformVisualizerProps {
 }
 
 /**
- * Live microphone waveform, replacing Sprint 2.1's WaveformPlaceholder.
+ * Live microphone waveform.
  *
  * Bar heights come from useWaveform, which reads real amplitude data
  * through a WaveformSource — WebAudioWaveformSource (Web Audio's
@@ -25,8 +25,8 @@ interface WaveformVisualizerProps {
  *
  * When `stream` is null, this shows a flat, dim bar row rather than
  * frozen or fabricated data — an honest "nothing is live right now"
- * rather than Sprint 2.1's placeholder animation, which was decorative
- * by necessity before real capture existed.
+ * rather than a decorative animation standing in for audio that was
+ * never captured.
  */
 export function WaveformVisualizer({ status, stream }: WaveformVisualizerProps) {
   const isActive = status === "recording";
