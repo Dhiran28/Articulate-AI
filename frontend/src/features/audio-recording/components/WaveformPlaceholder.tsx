@@ -12,11 +12,24 @@ const BAR_COUNT = 32;
  * A real Math.random() here would produce different bar heights during
  * Next.js's server-rendered HTML pass than during the client's first
  * render, which React flags as a hydration mismatch. Seeding by index
- * keeps the output identical on both passes.
+ * avoids that — but only if the formula itself is guaranteed to produce
+ * identical output on both sides. An earlier version of this function
+ * used Math.sin(), which is a transcendental function: the ECMAScript
+ * spec doesn't require every engine to compute it bit-for-bit
+ * identically, so the Node.js engine doing the server render and the
+ * browser engine doing the client render could (rarely) round the last
+ * few bits differently and still trip the hydration check. This version
+ * uses only integer multiply/XOR/shift, all of which the spec *does*
+ * guarantee are exact everywhere (a standard Murmur3-style hash).
  */
 function seededRandom(seed: number): number {
-  const x = Math.sin(seed * 12.9898) * 43758.5453;
-  return x - Math.floor(x);
+  let x = (seed + 1) * 2654435761;
+  x = (x ^ (x >>> 16)) >>> 0;
+  x = Math.imul(x, 2246822519);
+  x = (x ^ (x >>> 13)) >>> 0;
+  x = Math.imul(x, 3266489917);
+  x = (x ^ (x >>> 16)) >>> 0;
+  return x / 4294967296;
 }
 
 const BAR_HEIGHTS = Array.from({ length: BAR_COUNT }, (_, i) => 0.25 + seededRandom(i) * 0.75);
