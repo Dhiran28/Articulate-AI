@@ -7,6 +7,7 @@ import { PlaybackPanel } from "./PlaybackPanel";
 import { RecordingControls } from "./RecordingControls";
 import { RecordingStatusBadge } from "./RecordingStatusBadge";
 import { RecordingTimer } from "./RecordingTimer";
+import { UnsupportedBrowserNotice } from "./UnsupportedBrowserNotice";
 import { WaveformVisualizer } from "./WaveformVisualizer";
 
 /**
@@ -30,6 +31,13 @@ import { WaveformVisualizer } from "./WaveformVisualizer";
  * hook's `mediaStream` directly rather than just `status`, since it
  * needs the live stream to visualize, not just to know what state
  * recording is in.
+ *
+ * As of Sprint 2.6, `browserSupport` gates everything else: if it's set
+ * (unsupported browser, or an insecure connection), the whole recording
+ * UI — status badge, waveform, timer, controls — is replaced by
+ * UnsupportedBrowserNotice. None of those controls would work anyway,
+ * and showing them disabled with an error underneath would look broken
+ * rather than explain what's actually going on.
  */
 export function PracticeScreen() {
   const {
@@ -38,6 +46,7 @@ export function PracticeScreen() {
     artifact,
     playbackUrl,
     mediaStream,
+    browserSupport,
     errorMessage,
     record,
     pause,
@@ -58,33 +67,39 @@ export function PracticeScreen() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col items-center gap-6">
-          <RecordingStatusBadge status={status} />
-
-          {errorMessage && (
-            <p role="alert" className="text-center text-sm text-destructive">
-              {errorMessage}
-            </p>
-          )}
-
-          {hasFinishedRecording ? (
-            <PlaybackPanel
-              artifact={artifact}
-              playbackUrl={playbackUrl}
-              onRecordAgain={record}
-              onDelete={reset}
-            />
+          {browserSupport ? (
+            <UnsupportedBrowserNotice support={browserSupport} />
           ) : (
             <>
-              <WaveformVisualizer status={status} stream={mediaStream} />
-              <RecordingTimer elapsedMs={elapsedMs} />
-              <RecordingControls
-                status={status}
-                onRecord={record}
-                onPause={pause}
-                onResume={resume}
-                onStop={stop}
-                onReset={reset}
-              />
+              <RecordingStatusBadge status={status} />
+
+              {errorMessage && (
+                <p role="alert" className="text-center text-sm text-destructive">
+                  {errorMessage}
+                </p>
+              )}
+
+              {hasFinishedRecording ? (
+                <PlaybackPanel
+                  artifact={artifact}
+                  playbackUrl={playbackUrl}
+                  onRecordAgain={record}
+                  onDelete={reset}
+                />
+              ) : (
+                <>
+                  <WaveformVisualizer status={status} stream={mediaStream} />
+                  <RecordingTimer elapsedMs={elapsedMs} />
+                  <RecordingControls
+                    status={status}
+                    onRecord={record}
+                    onPause={pause}
+                    onResume={resume}
+                    onStop={stop}
+                    onReset={reset}
+                  />
+                </>
+              )}
             </>
           )}
         </CardContent>

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import { BrowserMediaRecorderSource, type AudioSource } from "../lib/audioSource";
+import { checkBrowserSupport, classifyMicrophoneError, type MicrophoneError } from "../lib/microphoneError";
 import { LocalObjectUrlSink } from "../lib/recordingSink";
 import { recordingMachineReducer } from "../state/recordingMachine";
 import type { RecordingArtifact } from "../types";
@@ -20,8 +21,10 @@ const TICK_INTERVAL_MS = 250;
  * additionally exposes `artifact` (the finished Blob + metadata),
  * `playbackUrl` (an object URL for that same artifact, for playback),
  * `mediaStream` (the live microphone stream while a session is open, for
- * Sprint 2.4's waveform to tap independently — see useWaveform), and
- * `errorMessage`, none of which exist without real capture involved.
+ * Sprint 2.4's waveform to tap independently — see useWaveform),
+ * `browserSupport` (Sprint 2.6: set once, client-side only, if this
+ * browser or connection can't record at all), and `errorMessage`, none
+ * of which exist without real capture involved.
  */
 export function useAudioRecorder() {
   const [status, dispatch] = useReducer(recordingMachineReducer, "idle");
@@ -29,6 +32,7 @@ export function useAudioRecorder() {
   const [artifact, setArtifact] = useState<RecordingArtifact | null>(null);
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
+  const [browserSupport, setBrowserSupport] = useState<MicrophoneError | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const sourceRef = useRef<AudioSource | null>(null);
@@ -76,6 +80,23 @@ export function useAudioRecorder() {
     [finalizeElapsed]
   );
 
+  // Detect browser/connection support once, on mount, client-side only.
+  //
+  // This deliberately isn't computed inline during render (e.g. via a
+  // useState lazy initializer). checkBrowserSupport() reads
+  // window/navigator, which don't exist during Next.js's server-rendered
+  // pass; if the *client's* first render produced a different result
+  // than the (window-less) server render, React would treat it as a
+  // hydration mismatch — the same class of bug fixed in Sprint 2.2 for
+  // the waveform's bar heights. Starting from `null` (assume supported)
+  // on both the server and the client's initial render, then correcting
+  // it here after mount, avoids that: there's a brief window where an
+  // actually-unsupported browser still shows the normal recording UI,
+  // but it resolves within the same tick, before a user could act on it.
+  useEffect(() => {
+    setBrowserSupport(checkBrowserSupport());
+  }, []);
+
   // Timer display: ticks every TICK_INTERVAL_MS while recording, but
   // always computes elapsed as (accumulated + time since this segment
   // started) rather than incrementing a counter per tick. That matters
@@ -113,6 +134,17 @@ export function useAudioRecorder() {
       return;
     }
 
+    // Defensive re-check, even though the UI shouldn't offer a Record
+    // button at all once browserSupport is set (see PracticeScreen) —
+    // this guards the rare case of record() being reached before that
+    // effect has run, or being called some other way.
+    const unsupported = checkBrowserSupport();
+    if (unsupported) {
+      setBrowserSupport(unsupported);
+      setErrorMessage(unsupported.message);
+      return;
+    }
+
     setErrorMessage(null);
     setArtifact(null);
     if (objectUrlRef.current) {
@@ -145,9 +177,17 @@ export function useAudioRecorder() {
       sourceRef.current = null;
       stream?.getTracks().forEach((track) => track.stop());
       setMediaStream(null);
-      setErrorMessage(
-        err instanceof Error ? err.message : "Microphone access was denied or unavailable."
-      );
+
+      // Classified by DOMException name (permission denied / no device /
+      // device in use / etc.) rather than shown as the browser's raw
+      // error text — see lib/microphoneError.ts for why. The original
+      // error still goes to the console for debugging.
+      const classified = classifyMicrophoneError(err);
+      console.error("Failed to start recording:", err);
+      setErrorMessage(classified.message);
+      // PERMISSION_DENIED is this state machine's name for "the attempt
+      // to start recording failed" broadly — not literally only
+      // permission denial. See state/recordingMachine.ts.
       dispatch({ type: "PERMISSION_DENIED" });
     }
   }, [status, handleSourceError]);
@@ -222,6 +262,7 @@ export function useAudioRecorder() {
     artifact,
     playbackUrl,
     mediaStream,
+    browserSupport,
     errorMessage,
     record,
     pause,
