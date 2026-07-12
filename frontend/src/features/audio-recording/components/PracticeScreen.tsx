@@ -3,16 +3,11 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
+import { PlaybackPanel } from "./PlaybackPanel";
 import { RecordingControls } from "./RecordingControls";
 import { RecordingStatusBadge } from "./RecordingStatusBadge";
 import { RecordingTimer } from "./RecordingTimer";
 import { WaveformPlaceholder } from "./WaveformPlaceholder";
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const kb = bytes / 1024;
-  return kb < 1024 ? `${kb.toFixed(1)} KB` : `${(kb / 1024).toFixed(1)} MB`;
-}
 
 /**
  * Composes the Practice screen and owns the one hook that drives it.
@@ -23,10 +18,19 @@ function formatBytes(bytes: number): string {
  * approach underneath are unchanged — being able to swap the hook
  * without touching this file or any of its children was the entire
  * point of designing it behind one interface in ADR 001.
+ *
+ * As of Sprint 2.3, the screen shows one of two mutually exclusive
+ * views: the transport controls (record/pause/resume/stop) while a
+ * recording is idle or in progress, or the playback panel
+ * (play/record again/delete) once a recording exists. Showing both at
+ * once would give two different ways to "start over" (Record vs. Record
+ * Again) at the same time, which is confusing rather than flexible.
  */
 export function PracticeScreen() {
-  const { status, elapsedMs, artifact, errorMessage, record, pause, resume, stop, reset } =
+  const { status, elapsedMs, artifact, playbackUrl, errorMessage, record, pause, resume, stop, reset } =
     useAudioRecorder();
+
+  const hasFinishedRecording = status === "stopped" && artifact !== null && playbackUrl !== null;
 
   return (
     <div className="flex min-h-screen items-center justify-center p-6">
@@ -46,22 +50,26 @@ export function PracticeScreen() {
             </p>
           )}
 
-          <WaveformPlaceholder status={status} />
-          <RecordingTimer elapsedMs={elapsedMs} />
-
-          <RecordingControls
-            status={status}
-            onRecord={record}
-            onPause={pause}
-            onResume={resume}
-            onStop={stop}
-            onReset={reset}
-          />
-
-          {artifact && (
-            <p className="text-xs text-muted-foreground">
-              Recording captured — {formatBytes(artifact.blob.size)}, {artifact.mimeType}
-            </p>
+          {hasFinishedRecording ? (
+            <PlaybackPanel
+              artifact={artifact}
+              playbackUrl={playbackUrl}
+              onRecordAgain={record}
+              onDelete={reset}
+            />
+          ) : (
+            <>
+              <WaveformPlaceholder status={status} />
+              <RecordingTimer elapsedMs={elapsedMs} />
+              <RecordingControls
+                status={status}
+                onRecord={record}
+                onPause={pause}
+                onResume={resume}
+                onStop={stop}
+                onReset={reset}
+              />
+            </>
           )}
         </CardContent>
       </Card>

@@ -17,13 +17,15 @@ const TICK_INTERVAL_MS = 250;
  * This replaces Sprint 2.1's useRecordingUIState outright — that hook's
  * header comment said as much. The two expose a near-identical surface
  * ({ status, elapsedMs, record, pause, resume, stop, reset }); this one
- * additionally exposes `artifact` (the finished Blob + metadata) and
- * `errorMessage`, which only exist once real capture is involved.
+ * additionally exposes `artifact` (the finished Blob + metadata),
+ * `playbackUrl` (an object URL for that same artifact, for playback),
+ * and `errorMessage`, none of which exist without real capture involved.
  */
 export function useAudioRecorder() {
   const [status, dispatch] = useReducer(recordingMachineReducer, "idle");
   const [elapsedMs, setElapsedMs] = useState(0);
   const [artifact, setArtifact] = useState<RecordingArtifact | null>(null);
+  const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const sourceRef = useRef<AudioSource | null>(null);
@@ -88,6 +90,7 @@ export function useAudioRecorder() {
     if (objectUrlRef.current) {
       sinkRef.current.release(objectUrlRef.current);
       objectUrlRef.current = null;
+      setPlaybackUrl(null);
     }
     accumulatedMsRef.current = 0;
     startedAtRef.current = null;
@@ -151,6 +154,7 @@ export function useAudioRecorder() {
       };
       setArtifact(finalArtifact);
       objectUrlRef.current = sinkRef.current.save(finalArtifact);
+      setPlaybackUrl(objectUrlRef.current);
       dispatch({ type: "STOP" });
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "Failed to finish the recording.");
@@ -167,6 +171,7 @@ export function useAudioRecorder() {
     if (objectUrlRef.current) {
       sinkRef.current.release(objectUrlRef.current);
       objectUrlRef.current = null;
+      setPlaybackUrl(null);
     }
     accumulatedMsRef.current = 0;
     startedAtRef.current = null;
@@ -176,5 +181,16 @@ export function useAudioRecorder() {
     dispatch({ type: "RESET" });
   }, []);
 
-  return { status, elapsedMs, artifact, errorMessage, record, pause, resume, stop, reset };
+  return {
+    status,
+    elapsedMs,
+    artifact,
+    playbackUrl,
+    errorMessage,
+    record,
+    pause,
+    resume,
+    stop,
+    reset,
+  };
 }

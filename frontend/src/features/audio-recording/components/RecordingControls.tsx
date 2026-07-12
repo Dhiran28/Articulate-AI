@@ -22,6 +22,14 @@ interface RecordingControlsProps {
  * five — keeping that in one place is easier to verify at a glance than
  * tracing it across five files, and there's no reuse case yet that would
  * justify splitting them apart.
+ *
+ * As of Sprint 2.3, PracticeScreen only renders this component while
+ * status is idle/requesting_permission/recording/paused/error — once a
+ * recording finishes (status === "stopped") it swaps to PlaybackPanel
+ * instead, which has its own Record Again and Delete actions that cover
+ * what Record/Reset used to do in that state. `canReset` is scoped to
+ * recording/paused/error accordingly: those are the only states where
+ * this component is on screen with something to reset.
  */
 export function RecordingControls({
   status,
@@ -35,7 +43,7 @@ export function RecordingControls({
   const canPause = status === "recording";
   const canResume = status === "paused";
   const canStop = status === "recording" || status === "paused";
-  const canReset = status !== "idle" && status !== "requesting_permission";
+  const canReset = status === "recording" || status === "paused" || status === "error";
 
   return (
     <div
