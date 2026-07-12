@@ -7,16 +7,20 @@ import type { RecordingStatus } from "../types";
 
 const STATUS_LABEL: Record<RecordingStatus, string> = {
   idle: "Idle",
+  requesting_permission: "Requesting Mic Access",
   recording: "Recording",
   paused: "Paused",
   stopped: "Stopped",
+  error: "Error",
 };
 
 const STATUS_CLASSES: Record<RecordingStatus, string> = {
   idle: "bg-muted text-muted-foreground",
+  requesting_permission: "bg-blue-500 text-white",
   recording: "bg-red-600 text-white",
   paused: "bg-amber-500 text-white",
   stopped: "bg-emerald-600 text-white",
+  error: "bg-red-800 text-white",
 };
 
 interface RecordingStatusBadgeProps {

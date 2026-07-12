@@ -2,27 +2,31 @@
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-import { useRecordingUIState } from "../hooks/useRecordingUIState";
+import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { RecordingControls } from "./RecordingControls";
 import { RecordingStatusBadge } from "./RecordingStatusBadge";
 import { RecordingTimer } from "./RecordingTimer";
 import { WaveformPlaceholder } from "./WaveformPlaceholder";
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  return kb < 1024 ? `${kb.toFixed(1)} KB` : `${(kb / 1024).toFixed(1)} MB`;
+}
+
 /**
- * Composes the Practice screen from its pieces and owns the one hook
- * that drives all of them.
+ * Composes the Practice screen and owns the one hook that drives it.
  *
- * State is passed down as plain props rather than through a
- * RecordingProvider context, even though ADR 001 sketches a context for
- * the eventual real implementation. For a single flat screen with a
- * handful of direct children, prop drilling one level is simpler than a
- * context and just as easy to follow. Context earns its cost once state
- * needs to reach components nested deeper than this, or needs to be read
- * from outside this screen — worth revisiting when Sprint 2.2 wires up
- * real microphone capture, which has more state and lifecycle to manage.
+ * As of Sprint 2.2 this uses the real `useAudioRecorder` hook (browser
+ * microphone capture via MediaRecorder) instead of Sprint 2.1's
+ * `useRecordingUIState` mock. The component tree and prop-drilling
+ * approach underneath are unchanged — being able to swap the hook
+ * without touching this file or any of its children was the entire
+ * point of designing it behind one interface in ADR 001.
  */
 export function PracticeScreen() {
-  const { status, elapsedMs, record, pause, resume, stop, reset } = useRecordingUIState();
+  const { status, elapsedMs, artifact, errorMessage, record, pause, resume, stop, reset } =
+    useAudioRecorder();
 
   return (
     <div className="flex min-h-screen items-center justify-center p-6">
@@ -35,8 +39,16 @@ export function PracticeScreen() {
         </CardHeader>
         <CardContent className="flex flex-col items-center gap-6">
           <RecordingStatusBadge status={status} />
+
+          {errorMessage && (
+            <p role="alert" className="text-center text-sm text-destructive">
+              {errorMessage}
+            </p>
+          )}
+
           <WaveformPlaceholder status={status} />
           <RecordingTimer elapsedMs={elapsedMs} />
+
           <RecordingControls
             status={status}
             onRecord={record}
@@ -45,6 +57,12 @@ export function PracticeScreen() {
             onStop={stop}
             onReset={reset}
           />
+
+          {artifact && (
+            <p className="text-xs text-muted-foreground">
+              Recording captured — {formatBytes(artifact.blob.size)}, {artifact.mimeType}
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>

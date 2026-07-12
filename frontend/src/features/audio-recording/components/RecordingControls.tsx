@@ -31,11 +31,11 @@ export function RecordingControls({
   onStop,
   onReset,
 }: RecordingControlsProps) {
-  const canRecord = status === "idle" || status === "stopped";
+  const canRecord = status === "idle" || status === "stopped" || status === "error";
   const canPause = status === "recording";
   const canResume = status === "paused";
   const canStop = status === "recording" || status === "paused";
-  const canReset = status !== "idle";
+  const canReset = status !== "idle" && status !== "requesting_permission";
 
   return (
     <div

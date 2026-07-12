@@ -27,15 +27,16 @@ interface WaveformPlaceholderProps {
 
 /**
  * Stand-in for the real waveform, which (per ADR 001) will eventually be
- * driven by an AnalyserNode reading the live MediaStream. Until real
- * audio capture exists, this renders a fixed bar pattern that animates
- * only while `status === "recording"`, and freezes in place on pause or
- * stop — giving the screen a responsive feel without pretending to
- * visualize audio that was never captured.
+ * driven by an AnalyserNode reading the live MediaStream. Sprint 2.2
+ * wires up real audio capture but deliberately does not touch this
+ * component — reading live audio data to draw a waveform is a form of
+ * audio analysis, which is out of scope for this sprint. This still
+ * renders a fixed bar pattern that animates only while
+ * `status === "recording"`, and freezes on pause or stop.
  */
 export function WaveformPlaceholder({ status }: WaveformPlaceholderProps) {
   const isRecording = status === "recording";
-  const isIdle = status === "idle";
+  const isIdle = status === "idle" || status === "requesting_permission" || status === "error";
   const isAnimated = status === "recording" || status === "paused" || status === "stopped";
 
   return (
