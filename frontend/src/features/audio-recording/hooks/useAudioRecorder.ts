@@ -19,13 +19,16 @@ const TICK_INTERVAL_MS = 250;
  * ({ status, elapsedMs, record, pause, resume, stop, reset }); this one
  * additionally exposes `artifact` (the finished Blob + metadata),
  * `playbackUrl` (an object URL for that same artifact, for playback),
- * and `errorMessage`, none of which exist without real capture involved.
+ * `mediaStream` (the live microphone stream while a session is open, for
+ * Sprint 2.4's waveform to tap independently — see useWaveform), and
+ * `errorMessage`, none of which exist without real capture involved.
  */
 export function useAudioRecorder() {
   const [status, dispatch] = useReducer(recordingMachineReducer, "idle");
   const [elapsedMs, setElapsedMs] = useState(0);
   const [artifact, setArtifact] = useState<RecordingArtifact | null>(null);
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
+  const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const sourceRef = useRef<AudioSource | null>(null);
@@ -40,6 +43,7 @@ export function useAudioRecorder() {
     dispatch({ type: "ERROR" });
     sourceRef.current?.dispose();
     sourceRef.current = null;
+    setMediaStream(null);
   }, []);
 
   // Timer: same timestamp-based approach as Sprint 2.1, now driven by
@@ -104,6 +108,7 @@ export function useAudioRecorder() {
       const source = new BrowserMediaRecorderSource(stream, handleSourceError);
       sourceRef.current = source;
       await source.start();
+      setMediaStream(stream);
       dispatch({ type: "PERMISSION_GRANTED" });
     } catch (err) {
       // Clean up anything partially acquired so the mic indicator
@@ -111,6 +116,7 @@ export function useAudioRecorder() {
       sourceRef.current?.dispose();
       sourceRef.current = null;
       stream?.getTracks().forEach((track) => track.stop());
+      setMediaStream(null);
       setErrorMessage(
         err instanceof Error ? err.message : "Microphone access was denied or unavailable."
       );
@@ -162,12 +168,14 @@ export function useAudioRecorder() {
     } finally {
       source.dispose();
       sourceRef.current = null;
+      setMediaStream(null);
     }
   }, []);
 
   const reset = useCallback(() => {
     sourceRef.current?.dispose();
     sourceRef.current = null;
+    setMediaStream(null);
     if (objectUrlRef.current) {
       sinkRef.current.release(objectUrlRef.current);
       objectUrlRef.current = null;
@@ -186,6 +194,7 @@ export function useAudioRecorder() {
     elapsedMs,
     artifact,
     playbackUrl,
+    mediaStream,
     errorMessage,
     record,
     pause,

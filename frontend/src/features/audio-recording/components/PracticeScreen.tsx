@@ -7,7 +7,7 @@ import { PlaybackPanel } from "./PlaybackPanel";
 import { RecordingControls } from "./RecordingControls";
 import { RecordingStatusBadge } from "./RecordingStatusBadge";
 import { RecordingTimer } from "./RecordingTimer";
-import { WaveformPlaceholder } from "./WaveformPlaceholder";
+import { WaveformVisualizer } from "./WaveformVisualizer";
 
 /**
  * Composes the Practice screen and owns the one hook that drives it.
@@ -25,10 +25,26 @@ import { WaveformPlaceholder } from "./WaveformPlaceholder";
  * (play/record again/delete) once a recording exists. Showing both at
  * once would give two different ways to "start over" (Record vs. Record
  * Again) at the same time, which is confusing rather than flexible.
+ *
+ * As of Sprint 2.4, the waveform is real: WaveformVisualizer reads the
+ * hook's `mediaStream` directly rather than just `status`, since it
+ * needs the live stream to visualize, not just to know what state
+ * recording is in.
  */
 export function PracticeScreen() {
-  const { status, elapsedMs, artifact, playbackUrl, errorMessage, record, pause, resume, stop, reset } =
-    useAudioRecorder();
+  const {
+    status,
+    elapsedMs,
+    artifact,
+    playbackUrl,
+    mediaStream,
+    errorMessage,
+    record,
+    pause,
+    resume,
+    stop,
+    reset,
+  } = useAudioRecorder();
 
   const hasFinishedRecording = status === "stopped" && artifact !== null && playbackUrl !== null;
 
@@ -59,7 +75,7 @@ export function PracticeScreen() {
             />
           ) : (
             <>
-              <WaveformPlaceholder status={status} />
+              <WaveformVisualizer status={status} stream={mediaStream} />
               <RecordingTimer elapsedMs={elapsedMs} />
               <RecordingControls
                 status={status}
