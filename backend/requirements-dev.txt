@@ -1,0 +1,7 @@
+-r requirements.txt
+
+# Test-only tooling, kept out of requirements.txt so a production install
+# doesn't pull in a test runner it'll never use.
+pytest==9.1.1
+pytest-asyncio==1.4.0
+httpx==0.28.1
