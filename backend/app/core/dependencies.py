@@ -14,6 +14,11 @@ were moved here — not to change their behavior, but because the new
 which only works if both routes share the exact same AudioService /
 RecordStore instances.
 
+Sprint 3.5 added get_transcript_processor for the Transcript Processor
+stage (app/transcript_processing/) that turns a RawTranscriptionResult
+into a ProcessedTranscript + TranscriptMetadata — see that package's
+processor.py for why "processing" here never means "cleaning."
+
 Every dependency function that has its own dependencies (get_audio_service,
 get_transcription_service) declares them as `Depends(...)` parameters,
 rather than calling e.g. get_blob_store() directly in its body. That
@@ -41,6 +46,7 @@ from app.storage.record_store import InMemoryRecordStore, RecordStore
 from app.transcription.providers.base import TranscriptionProvider
 from app.transcription.providers.openai_whisper import OpenAIWhisperProvider
 from app.transcription.service import TranscriptionService
+from app.transcript_processing.processor import TranscriptProcessor
 
 
 @lru_cache
@@ -92,3 +98,11 @@ def get_transcription_service(
     provider: TranscriptionProvider = Depends(get_transcription_provider),
 ) -> TranscriptionService:
     return TranscriptionService(audio_service, blob_store, provider)
+
+
+@lru_cache
+def get_transcript_processor() -> TranscriptProcessor:
+    # No sub-dependencies of its own (it's a pure function over whatever
+    # RawTranscriptionResult it's given), so a plain cached singleton is
+    # enough — there's no provider-style swapping to support here yet.
+    return TranscriptProcessor()
