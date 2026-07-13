@@ -6,7 +6,7 @@ from .base import RawAudioUpload
 class HttpUploadIngestor:
     """
     Wraps a FastAPI/Starlette UploadFile — a multipart file field on
-    POST /api/audio — as a RawAudioUpload. Today's only AudioIngestor; see
+    POST /api/upload — as a RawAudioUpload. Today's only AudioIngestor; see
     base.py for why this is an interface rather than AudioService calling
     UploadFile directly.
     """
