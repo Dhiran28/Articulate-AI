@@ -14,12 +14,19 @@ const STATUS_LABEL: Record<RecordingStatus, string> = {
   error: "Error",
 };
 
+// Colors verified against WCAG AA (4.5:1 for normal-size text) with white
+// foreground text, since this badge renders at text-xs (12px):
+//   blue-600    ~5.17:1   (blue-500 measured ~3.68:1 — failed)
+//   amber-700   ~5.02:1   (amber-500 measured ~2.15:1 — failed badly)
+//   emerald-700 ~5.48:1   (emerald-600 measured ~3.77:1 — failed)
+//   red-600     ~4.83:1   (already passing, unchanged)
+//   red-800     darker than red-600, passes with margin (unchanged)
 const STATUS_CLASSES: Record<RecordingStatus, string> = {
   idle: "bg-muted text-muted-foreground",
-  requesting_permission: "bg-blue-500 text-white",
+  requesting_permission: "bg-blue-600 text-white",
   recording: "bg-red-600 text-white",
-  paused: "bg-amber-500 text-white",
-  stopped: "bg-emerald-600 text-white",
+  paused: "bg-amber-700 text-white",
+  stopped: "bg-emerald-700 text-white",
   error: "bg-red-800 text-white",
 };
 

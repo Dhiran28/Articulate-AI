@@ -4,6 +4,7 @@ import { RotateCcw, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
+import { formatDuration } from "../lib/formatDuration";
 import type { RecordingArtifact } from "../types";
 
 interface PlaybackPanelProps {
@@ -11,21 +12,6 @@ interface PlaybackPanelProps {
   playbackUrl: string;
   onRecordAgain: () => void;
   onDelete: () => void;
-}
-
-// Note (found during the Sprint 2.7 review, deliberately left as-is):
-// this doesn't zero-pad minutes or expand past an hour the way
-// RecordingTimer's formatElapsed does — "0:05" here vs. "00:05" there
-// for the same five seconds. That's drift from being written
-// independently, not an intentional distinction, but changing it would
-// change what's rendered on screen, which is out of scope for a
-// review pass that isn't supposed to alter functionality. Worth
-// unifying into one shared formatter in a future sprint.
-function formatDuration(ms: number): string {
-  const totalSeconds = Math.round(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 function formatBytes(bytes: number): string {
@@ -56,6 +42,13 @@ function formatBytes(bytes: number): string {
  * audio element — it's the value this app tracked itself from real
  * timestamps while recording (see useAudioRecorder), so it's correct
  * regardless of what the player displays.
+ *
+ * Delete is a permanent, unrecoverable action (there's no undo and no
+ * backend copy to restore from), so it's gated behind a native confirm()
+ * dialog rather than firing immediately on click. A native dialog was
+ * chosen over a custom one for this: it's keyboard- and screen-reader
+ * accessible by default, and the extra weight of a custom confirmation
+ * component isn't justified for a single destructive action on one screen.
  */
 export function PlaybackPanel({
   artifact,
@@ -63,6 +56,12 @@ export function PlaybackPanel({
   onRecordAgain,
   onDelete,
 }: PlaybackPanelProps) {
+  const handleDelete = () => {
+    if (window.confirm("Delete this recording? This can't be undone.")) {
+      onDelete();
+    }
+  };
+
   return (
     <div className="flex w-full flex-col items-center gap-4 rounded-lg border border-border p-4">
       <p className="text-sm text-muted-foreground">
@@ -76,12 +75,12 @@ export function PlaybackPanel({
 
       <div className="flex flex-wrap items-center justify-center gap-3">
         <Button onClick={onRecordAgain} variant="secondary" size="lg" className="gap-2">
-          <RotateCcw className="h-4 w-4" />
+          <RotateCcw className="h-4 w-4" aria-hidden="true" />
           Record Again
         </Button>
 
-        <Button onClick={onDelete} variant="destructive" size="lg" className="gap-2">
-          <Trash2 className="h-4 w-4" />
+        <Button onClick={handleDelete} variant="destructive" size="lg" className="gap-2">
+          <Trash2 className="h-4 w-4" aria-hidden="true" />
           Delete
         </Button>
       </div>

@@ -47,13 +47,23 @@ export function pickSupportedMimeType(): string | undefined {
  * mid-session) — see ADR 001 section 7. The caller (useAudioRecorder)
  * uses this to move the session into an error state instead of leaving
  * it silently stuck in "recording".
+ *
+ * `onError` is handed the raw underlying error rather than a
+ * pre-formatted message, so lib/microphoneError.ts remains the single
+ * place that decides what the user actually sees — this class shouldn't
+ * also be in the business of writing user-facing copy. The recorder's
+ * own "error" event carries a real DOMException, classified directly by
+ * name. A track "ended" event carries no DOMException at all (the
+ * browser gives no reason), so it's reported as a plain Error with a
+ * synthetic `name: "MediaStreamTrackEndedError"` that
+ * classifyMicrophoneError recognizes as its own case.
  */
 export class BrowserMediaRecorderSource implements AudioSource {
   private stream: MediaStream;
   private recorder: MediaRecorder;
   private chunks: BlobPart[] = [];
 
-  constructor(stream: MediaStream, onError?: (error: Error) => void) {
+  constructor(stream: MediaStream, onError?: (error: unknown) => void) {
     this.stream = stream;
 
     const mimeType = pickSupportedMimeType();
@@ -66,13 +76,15 @@ export class BrowserMediaRecorderSource implements AudioSource {
     });
 
     this.recorder.addEventListener("error", (event) => {
-      const error = (event as Event & { error?: DOMException }).error;
-      onError?.(new Error(error?.message ?? "Recording device error."));
+      const domError = (event as Event & { error?: DOMException }).error;
+      onError?.(domError ?? new Error("Recording device error."));
     });
 
     stream.getTracks().forEach((track) => {
       track.addEventListener("ended", () => {
-        onError?.(new Error("The microphone was disconnected."));
+        const error = new Error("The microphone was disconnected.");
+        error.name = "MediaStreamTrackEndedError";
+        onError?.(error);
       });
     });
   }

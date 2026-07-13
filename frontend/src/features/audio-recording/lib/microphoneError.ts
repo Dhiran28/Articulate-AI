@@ -64,11 +64,25 @@ export function checkBrowserSupport(): MicrophoneError | null {
 /**
  * Maps a failed getUserMedia (or MediaRecorder) call to a friendly,
  * professional message. Falls back to a generic message for anything
- * that isn't a recognized DOMException, rather than ever showing raw
- * technical error text to the user.
+ * that isn't a recognized error, rather than ever showing raw technical
+ * error text to the user.
+ *
+ * `name` is read from any Error-shaped value, not just DOMException:
+ * BrowserMediaRecorderSource also reports a mid-recording microphone
+ * disconnect (a MediaStreamTrack "ended" event, which carries no
+ * DOMException of its own) as a plain Error with a synthetic
+ * `name: "MediaStreamTrackEndedError"`, specifically so that failure
+ * mode gets classified here too instead of needing its own hardcoded
+ * message elsewhere. Every user-facing string for "something went wrong
+ * with the microphone" lives in this one file.
  */
 export function classifyMicrophoneError(error: unknown): MicrophoneError {
-  const name = error instanceof DOMException ? error.name : undefined;
+  const name =
+    error instanceof DOMException
+      ? error.name
+      : error instanceof Error
+        ? error.name
+        : undefined;
 
   switch (name) {
     case "NotAllowedError":
@@ -95,6 +109,14 @@ export function classifyMicrophoneError(error: unknown): MicrophoneError {
         kind: "not_readable",
         message:
           "Your microphone couldn't be started. It may be in use by another application — close anything else using the microphone and try again.",
+        cause: error,
+      };
+
+    case "MediaStreamTrackEndedError":
+      return {
+        kind: "not_readable",
+        message:
+          "The microphone was disconnected. Reconnect it and start recording again.",
         cause: error,
       };
 

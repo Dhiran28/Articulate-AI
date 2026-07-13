@@ -52,7 +52,7 @@ export function RecordingControls({
       aria-label="Recording controls"
     >
       <Button onClick={onRecord} disabled={!canRecord} size="lg" className="gap-2">
-        <Circle className="h-4 w-4 fill-current" />
+        <Circle className="h-4 w-4 fill-current" aria-hidden="true" />
         Record
       </Button>
 
@@ -63,7 +63,7 @@ export function RecordingControls({
         size="lg"
         className="gap-2"
       >
-        <Pause className="h-4 w-4" />
+        <Pause className="h-4 w-4" aria-hidden="true" />
         Pause
       </Button>
 
@@ -74,7 +74,7 @@ export function RecordingControls({
         size="lg"
         className="gap-2"
       >
-        <Play className="h-4 w-4" />
+        <Play className="h-4 w-4" aria-hidden="true" />
         Resume
       </Button>
 
@@ -85,7 +85,7 @@ export function RecordingControls({
         size="lg"
         className="gap-2"
       >
-        <Square className="h-4 w-4 fill-current" />
+        <Square className="h-4 w-4 fill-current" aria-hidden="true" />
         Stop
       </Button>
 
@@ -96,7 +96,7 @@ export function RecordingControls({
         size="lg"
         className="gap-2"
       >
-        <RotateCcw className="h-4 w-4" />
+        <RotateCcw className="h-4 w-4" aria-hidden="true" />
         Reset
       </Button>
     </div>

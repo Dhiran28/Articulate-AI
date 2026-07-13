@@ -7,8 +7,7 @@ import { checkBrowserSupport, classifyMicrophoneError, type MicrophoneError } fr
 import { LocalObjectUrlSink } from "../lib/recordingSink";
 import { recordingMachineReducer } from "../state/recordingMachine";
 import type { RecordingArtifact, RecordingStatus } from "../types";
-
-const TICK_INTERVAL_MS = 250;
+import { useRecordingClock } from "./useRecordingClock";
 
 /**
  * The full public contract of useAudioRecorder — everything the Practice
@@ -40,8 +39,11 @@ export interface UseAudioRecorderResult {
  *
  * record() requests microphone access, wraps the resulting MediaStream
  * in an AudioSource (BrowserMediaRecorderSource — see lib/audioSource.ts)
- * to drive an actual MediaRecorder, and tracks status and elapsed time
- * through pause/resume/stop. stop() hands the finished recording to a
+ * to drive an actual MediaRecorder, and tracks status through
+ * pause/resume/stop. Elapsed time is delegated entirely to
+ * useRecordingClock (see that file) rather than tracked inline here —
+ * it's timing-sensitive bookkeeping that's easier to get right, and to
+ * test, in isolation. stop() hands the finished recording to a
  * RecordingSink (lib/recordingSink.ts) and exposes it as both `artifact`
  * (the Blob and its metadata) and `playbackUrl` (a ready-to-play object
  * URL).
@@ -58,56 +60,90 @@ export interface UseAudioRecorderResult {
  */
 export function useAudioRecorder(): UseAudioRecorderResult {
   const [status, dispatch] = useReducer(recordingMachineReducer, "idle");
-  const [elapsedMs, setElapsedMs] = useState(0);
   const [artifact, setArtifact] = useState<RecordingArtifact | null>(null);
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
   const [browserSupport, setBrowserSupport] = useState<MicrophoneError | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const { elapsedMs, startSegment, finalizeSegment, reset: resetClock } = useRecordingClock(
+    status === "recording"
+  );
+
   const sourceRef = useRef<AudioSource | null>(null);
   const sinkRef = useRef(new LocalObjectUrlSink());
   const objectUrlRef = useRef<string | null>(null);
 
-  const startedAtRef = useRef<number | null>(null);
-  const accumulatedMsRef = useRef(0);
+  // Guards against two overlapping record() calls (e.g. a rapid or
+  // programmatic double-invocation) racing each other to acquire a
+  // microphone stream. This is a ref, not the `status` state, precisely
+  // because it must be checked and set synchronously within a single
+  // call — a state-based guard can't close the window between "read
+  // status" and "the resulting re-render actually disabling the Record
+  // button," since record() is async and status doesn't change until
+  // after the first `await`.
+  const isStartingRef = useRef(false);
+
+  // Set once on mount, false on unmount. record() and stop() check this
+  // after their one async gap (getUserMedia / source.stop()) before
+  // touching any resource that would otherwise be left with nothing to
+  // release it — see the comments at each call site. The same effect
+  // also releases the microphone and any object URL on unmount, so
+  // navigating away mid-recording doesn't leave the browser's mic
+  // indicator on.
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    const sink = sinkRef.current;
+    return () => {
+      isMountedRef.current = false;
+      sourceRef.current?.dispose();
+      if (objectUrlRef.current) sink.release(objectUrlRef.current);
+    };
+  }, []);
 
   /**
-   * Folds the currently-running segment (if any) into accumulatedMsRef
-   * and returns the new total. Called synchronously from pause(), stop(),
-   * and handleSourceError() — never from a useEffect keyed on `status`.
-   *
-   * An earlier version of this hook finalized the accumulated time from
-   * an effect that watched `status === "paused"`. That worked for the
-   * common case, but effects run asynchronously after a commit: a user
-   * (or a fast script) pausing and then immediately stopping — or
-   * resuming and then immediately stopping — could call stop() before
-   * that effect had run, silently dropping the last segment's time from
-   * the recorded duration. Computing the fold-in synchronously, at the
-   * moment each action actually happens, removes that whole class of
-   * timing bug rather than narrowing the window.
+   * Disposes the current AudioSource (releasing the microphone) and
+   * clears `mediaStream`. Shared by handleSourceError, record()'s
+   * failure path, stop()'s finally, and reset() — all four previously
+   * repeated this same three-line sequence inline.
    */
-  const finalizeElapsed = useCallback((): number => {
-    if (startedAtRef.current !== null) {
-      accumulatedMsRef.current += Date.now() - startedAtRef.current;
-      startedAtRef.current = null;
+  const releaseSource = useCallback((): void => {
+    sourceRef.current?.dispose();
+    sourceRef.current = null;
+    setMediaStream(null);
+  }, []);
+
+  /**
+   * Releases the current playback object URL (if any) and clears
+   * `playbackUrl`. Shared by record() (starting a new take discards the
+   * previous one's URL) and reset().
+   */
+  const clearPlayback = useCallback((): void => {
+    if (objectUrlRef.current) {
+      sinkRef.current.release(objectUrlRef.current);
+      objectUrlRef.current = null;
+      setPlaybackUrl(null);
     }
-    return accumulatedMsRef.current;
   }, []);
 
   const handleSourceError = useCallback(
-    (error: Error) => {
+    (error: unknown) => {
       // Freeze the timer at the exact moment of failure, rather than
       // leaving it to whatever the last periodic tick happened to show
-      // (which could be up to TICK_INTERVAL_MS stale).
-      setElapsedMs(finalizeElapsed());
-      setErrorMessage(error.message);
+      // (which could be up to one tick interval stale).
+      finalizeSegment();
+      // Classified the same way record()'s failures are, so every
+      // microphone-related message the user sees comes from one place
+      // (lib/microphoneError.ts) — see BrowserMediaRecorderSource for
+      // what values this can receive.
+      const classified = classifyMicrophoneError(error);
+      console.error("Recording source error:", error);
+      setErrorMessage(classified.message);
       dispatch({ type: "ERROR" });
-      sourceRef.current?.dispose();
-      sourceRef.current = null;
-      setMediaStream(null);
+      releaseSource();
     },
-    [finalizeElapsed]
+    [finalizeSegment, releaseSource]
   );
 
   // Detect browser/connection support once, on mount, client-side only.
@@ -128,42 +164,11 @@ export function useAudioRecorder(): UseAudioRecorderResult {
     setBrowserSupport(checkBrowserSupport());
   }, []);
 
-  // Timer display: ticks every TICK_INTERVAL_MS while recording, but
-  // always computes elapsed as (accumulated + time since this segment
-  // started) rather than incrementing a counter per tick. That matters
-  // if the browser throttles or delays setInterval — which it routinely
-  // does for background/inactive tabs — because the next tick that does
-  // fire still lands on the correct value instead of having drifted.
-  //
-  // startedAtRef is set synchronously by record() and resume() (not
-  // lazily here) — see finalizeElapsed's comment for why relying on
-  // effect timing was the wrong place for that.
-  useEffect(() => {
-    if (status !== "recording") return;
-
-    const interval = setInterval(() => {
-      if (startedAtRef.current === null) return; // shouldn't happen; defensive only
-      const elapsed = accumulatedMsRef.current + (Date.now() - startedAtRef.current);
-      setElapsedMs(Math.max(0, elapsed));
-    }, TICK_INTERVAL_MS);
-
-    return () => clearInterval(interval);
-  }, [status]);
-
-  // Release the microphone and any object URL on unmount, so navigating
-  // away mid-recording doesn't leave the browser's mic indicator on.
-  useEffect(() => {
-    const sink = sinkRef.current;
-    return () => {
-      sourceRef.current?.dispose();
-      if (objectUrlRef.current) sink.release(objectUrlRef.current);
-    };
-  }, []);
-
   const record = useCallback(async () => {
     if (status === "recording" || status === "paused" || status === "requesting_permission") {
       return;
     }
+    if (isStartingRef.current) return;
 
     // Defensive re-check, even though the UI shouldn't offer a Record
     // button at all once browserSupport is set (see PracticeScreen) —
@@ -176,43 +181,50 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       return;
     }
 
+    isStartingRef.current = true;
     setErrorMessage(null);
     setArtifact(null);
-    if (objectUrlRef.current) {
-      sinkRef.current.release(objectUrlRef.current);
-      objectUrlRef.current = null;
-      setPlaybackUrl(null);
-    }
-    accumulatedMsRef.current = 0;
-    startedAtRef.current = null;
-    setElapsedMs(0);
+    clearPlayback();
+    resetClock();
 
     dispatch({ type: "REQUEST_PERMISSION" });
 
     let stream: MediaStream | null = null;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      if (!isMountedRef.current) {
+        // Unmounted while the permission prompt was pending. Release the
+        // microphone immediately — there's no cleanup effect left to run
+        // that would ever do it, since the one that existed already ran
+        // when this component unmounted.
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
       const source = new BrowserMediaRecorderSource(stream, handleSourceError);
       sourceRef.current = source;
       await source.start();
       setMediaStream(stream);
       // Set synchronously, at the exact moment recording actually
       // starts, rather than lazily from the tick effect — see
-      // finalizeElapsed's comment for why that timing matters.
-      startedAtRef.current = Date.now();
+      // useRecordingClock's finalizeSegment doc comment for why that
+      // timing matters.
+      startSegment();
       dispatch({ type: "PERMISSION_GRANTED" });
     } catch (err) {
       // Clean up anything partially acquired so the mic indicator
-      // doesn't stay on after a failed start.
-      sourceRef.current?.dispose();
-      sourceRef.current = null;
+      // doesn't stay on after a failed start. Stopping the raw stream
+      // directly (in addition to releaseSource()) covers the case where
+      // getUserMedia succeeded but constructing the AudioSource itself
+      // threw before sourceRef was ever assigned.
+      releaseSource();
       stream?.getTracks().forEach((track) => track.stop());
-      setMediaStream(null);
 
-      // Classified by DOMException name (permission denied / no device /
-      // device in use / etc.) rather than shown as the browser's raw
-      // error text — see lib/microphoneError.ts for why. The original
-      // error still goes to the console for debugging.
+      // Classified by error name (permission denied / no device / device
+      // in use / etc.) rather than shown as the browser's raw error text
+      // — see lib/microphoneError.ts for why. The original error still
+      // goes to the console for debugging.
       const classified = classifyMicrophoneError(err);
       console.error("Failed to start recording:", err);
       setErrorMessage(classified.message);
@@ -220,23 +232,24 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       // to start recording failed" broadly — not literally only
       // permission denial. See state/recordingMachine.ts.
       dispatch({ type: "PERMISSION_DENIED" });
+    } finally {
+      isStartingRef.current = false;
     }
-  }, [status, handleSourceError]);
+  }, [status, handleSourceError, clearPlayback, resetClock, startSegment, releaseSource]);
 
   const pause = useCallback(() => {
     sourceRef.current?.pause();
-    const finalMs = finalizeElapsed();
-    setElapsedMs(finalMs);
+    finalizeSegment();
     dispatch({ type: "PAUSE" });
-  }, [finalizeElapsed]);
+  }, [finalizeSegment]);
 
   const resume = useCallback(() => {
     sourceRef.current?.resume();
     // Set synchronously — same reasoning as record(): this is the exact
     // moment the current segment starts, so it can't wait for an effect.
-    startedAtRef.current = Date.now();
+    startSegment();
     dispatch({ type: "RESUME" });
-  }, []);
+  }, [startSegment]);
 
   const stop = useCallback(async () => {
     const source = sourceRef.current;
@@ -244,11 +257,17 @@ export function useAudioRecorder(): UseAudioRecorderResult {
 
     // The artifact needs an accurate duration synchronously, so finalize
     // here rather than deferring to an effect.
-    const finalElapsedMs = finalizeElapsed();
-    setElapsedMs(finalElapsedMs);
+    const finalElapsedMs = finalizeSegment();
 
     try {
       const { blob, mimeType } = await source.stop();
+
+      // If the component unmounted while this await was pending, don't
+      // create a playback object URL for it — the unmount cleanup effect
+      // that would normally revoke it already ran, so one created now
+      // would never be released for the rest of the page's lifetime.
+      if (!isMountedRef.current) return;
+
       const finalArtifact: RecordingArtifact = {
         blob,
         mimeType,
@@ -261,31 +280,26 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       setPlaybackUrl(objectUrlRef.current);
       dispatch({ type: "STOP" });
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Failed to finish the recording.");
+      // Logged for debugging, but never shown to the user as raw text —
+      // same principle as classifyMicrophoneError, just without needing
+      // a full classification scheme for this one failure mode (the
+      // recorder unexpectedly not being active when stop() runs).
+      console.error("Failed to finish recording:", err);
+      setErrorMessage("Something went wrong finishing the recording. Please try again.");
       dispatch({ type: "ERROR" });
     } finally {
-      source.dispose();
-      sourceRef.current = null;
-      setMediaStream(null);
+      releaseSource();
     }
-  }, [finalizeElapsed]);
+  }, [finalizeSegment, releaseSource]);
 
   const reset = useCallback(() => {
-    sourceRef.current?.dispose();
-    sourceRef.current = null;
-    setMediaStream(null);
-    if (objectUrlRef.current) {
-      sinkRef.current.release(objectUrlRef.current);
-      objectUrlRef.current = null;
-      setPlaybackUrl(null);
-    }
-    accumulatedMsRef.current = 0;
-    startedAtRef.current = null;
-    setElapsedMs(0);
+    releaseSource();
+    clearPlayback();
+    resetClock();
     setArtifact(null);
     setErrorMessage(null);
     dispatch({ type: "RESET" });
-  }, []);
+  }, [releaseSource, clearPlayback, resetClock]);
 
   return {
     status,
