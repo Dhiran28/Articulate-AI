@@ -22,9 +22,26 @@ class Settings(BaseSettings):
     # Defaults to the local Next.js dev server.
     cors_origins: str = "http://localhost:3000"
 
+    # Where uploaded audio is written. Relative paths resolve from the
+    # working directory the server was started in (backend/, per the
+    # README's run instructions). See app/storage/blob_store.py — this is
+    # explicitly temporary storage, not a durable/production location.
+    upload_temp_dir: str = "tmp/audio"
+
+    # 25 MB isn't arbitrary: it matches the OpenAI Whisper API's own
+    # upload ceiling. Nothing in this sprint calls Whisper, but picking a
+    # limit already compatible with the most likely next-sprint provider
+    # avoids accepting an upload now that would just fail transcription
+    # later anyway.
+    max_upload_size_mb: int = 25
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",")]
+
+    @property
+    def max_upload_size_bytes(self) -> int:
+        return self.max_upload_size_mb * 1024 * 1024
 
 
 @lru_cache
