@@ -13,6 +13,7 @@ class AudioBlobStore(Protocol):
 
     def save(self, asset_id: str, audio_format: str, data: bytes) -> Path: ...
     def delete(self, asset_id: str, audio_format: str) -> None: ...
+    def path_for(self, asset_id: str, audio_format: str) -> Path: ...
 
 
 class LocalTempBlobStore:
@@ -33,13 +34,13 @@ class LocalTempBlobStore:
         self._base_dir = base_dir
         self._base_dir.mkdir(parents=True, exist_ok=True)
 
-    def _path_for(self, asset_id: str, audio_format: str) -> Path:
+    def path_for(self, asset_id: str, audio_format: str) -> Path:
         return self._base_dir / f"{asset_id}.{audio_format}"
 
     def save(self, asset_id: str, audio_format: str, data: bytes) -> Path:
-        path = self._path_for(asset_id, audio_format)
+        path = self.path_for(asset_id, audio_format)
         path.write_bytes(data)
         return path
 
     def delete(self, asset_id: str, audio_format: str) -> None:
-        self._path_for(asset_id, audio_format).unlink(missing_ok=True)
+        self.path_for(asset_id, audio_format).unlink(missing_ok=True)

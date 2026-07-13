@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     # later anyway.
     max_upload_size_mb: int = 25
 
+    # OpenAI Whisper API credentials/model. `None` by default rather than
+    # an empty string, so OpenAIWhisperProvider can distinguish
+    # "not configured" from "configured with an empty key" and fail with
+    # a clear, specific error instead of a confusing auth failure from
+    # the provider itself.
+    openai_api_key: str | None = None
+    whisper_model: str = "whisper-1"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",")]

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, upload
+from app.api import health, transcribe, upload
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -24,6 +24,7 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(upload.router)
+app.include_router(transcribe.router)
 
 
 @app.get("/")
