@@ -1,40 +1,34 @@
 """
-_BaseReasoningModule (Sprint 4.5): the shared orchestration every
-semantic reasoning module (StructureModule, ClarityModule,
-LogicalFlowModule, TopicDriftModule, ConfidenceModule,
-ConcisenessModule — see the sibling files in this package) subclasses,
-the same way Sprint 4.3's four Metric modules each independently
-implemented their own `analyze()` because a Metric module's logic is
-each genuinely different. A Reasoning module's *orchestration* — call
-the shared LLMReasoner, catch its errors, shape a ModuleResult — is
-identical across all six; only *what goes into the prompt* differs. This
-class captures the identical part once; each subclass supplies only
-`prompt_id` and `_build_template_context()`.
+_BaseReasoningModule (Sprint 4.5, repurposed Sprint 4.5.1): originally
+the shared orchestration all six concrete reasoning modules subclassed,
+each independently calling the shared `LLMReasoner` — six calls per
+analysis. Sprint 4.5.1 replaced that per-module-call design with
+`ReasoningPass` (reasoning_pass/batch.py), which makes one combined call
+for all six dimensions at once; the six concrete modules
+(`StructureModule`, `ClarityModule`, `LogicalFlowModule`,
+`TopicDriftModule`, `ConfidenceModule`, `ConcisenessModule`) now
+subclass `_SectionReasoningModule` (`section_reasoning_base.py`)
+instead, and no longer use this class at all.
 
-Every concrete reasoning module:
-  - is a REASONING module (module_type = ModuleType.REASONING)
-  - is constructed with an injected LLMReasoner (app/llm/reasoner.py) —
-    never a concrete provider, never an API key; this class has no idea
-    what LLM backend is behind the reasoner it was handed
-  - validates its LLM output against the one shared ReasoningResult
-    schema (models.py) — no module defines its own bespoke output shape,
-    which structurally enforces this sprint's "no scores" requirement:
-    ReasoningResult only has label/explanation/evidence, nothing a
-    module could smuggle a numeric score into
-  - never calls an LLM provider directly; every call flows through
-    `self._reasoner.reason(...)`, satisfying Sprint 4.5's explicit
-    "no module should directly call an LLM provider" requirement
+This class is kept, not deleted, because it is exactly ADR 003 §1's
+"deep analysis" escape hatch: a future reasoning dimension whose needs
+don't fit the shared batched prompt (multi-turn back-and-forth, tool
+use, a much longer context than the other dimensions comfortably share)
+can still subclass `_BaseReasoningModule` and make its own independent
+`LLMReasoner` call, exactly as every reasoning module did before Sprint
+4.5.1 — that option is real, tested infrastructure (see
+`tests/test_reasoning_base_escape_hatch.py`), not just documented intent.
+No concrete module in this codebase uses it today.
 
-A note on ADR 003's batching mandate: `self._reasoner.reason()` is
-called once per module here — each of the six concrete reasoning
-modules makes its own independent call through the shared LLMReasoner
-abstraction, not one combined request. That satisfies this class's own
-mandate ("no module talks to a provider directly," "must flow through
-LLMReasoner") but does NOT implement ADR 003's separate, larger
-requirement that reasoning modules share one batched LLM request by
-default. That's a disclosed, deliberate scope decision for this sprint,
-not an oversight — see docs/decisions/003-*.md's Sprint 4.5 revision
-note and this sprint's completion summary for the full reasoning.
+Every concrete subclass of this class still would:
+  - be a REASONING module (module_type = ModuleType.REASONING)
+  - be constructed with an injected LLMReasoner (app/llm/reasoner.py) —
+    never a concrete provider, never an API key
+  - validate its LLM output against the one shared ReasoningResult
+    schema (models.py) — no bespoke output shape, structurally ruling
+    out a smuggled-in numeric score
+  - never call an LLM provider directly; every call flows through
+    `self._reasoner.reason(...)`
 """
 
 from abc import ABC, abstractmethod

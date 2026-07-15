@@ -2,14 +2,18 @@
 
 This is `app/llm/` — the seam ADR 003 named ("app/llm/ ... depended on
 by both engines below; depends on neither") and Sprint 4.4 fully builds
-out. **It still contains no vendor SDK and no API key handling.** Sprint
-4.5 is this package's first real consumer: the six reasoning modules
-under `app/analysis/modules/` (`structure.py`, `clarity.py`,
-`logical_flow.py`, `topic_drift.py`, `confidence.py`, `conciseness.py`)
-each call `LLMReasoner.reason()` — still with no vendor SDK or real
-provider wired in; those modules are tested against a fake `LLMReasoner`
-(see `tests/test_reasoning_modules.py`), the same "fake the seam" pattern
-this package's own tests use for `LLMProvider`.
+out. **It still contains no vendor SDK and no API key handling.**
+Sprint 4.5 was this package's first real consumer, with each of six
+reasoning modules calling `LLMReasoner.reason()` independently. Sprint
+4.5.1 changed *who* calls it, not the interface itself: now exactly one
+component, `ReasoningPass` (`app/analysis/reasoning_pass/batch.py`),
+calls `LLMReasoner.reason()` once per analysis on behalf of all six
+reasoning modules, which no longer call this package at all — see
+`app/analysis/README.md`'s "Batching (Sprint 4.5.1)" section for the
+full design. `ReasoningPass` is tested against a fake `LLMReasoner`
+(`tests/test_reasoning_pass.py`), same as this package's own tests use
+for `LLMProvider` — still no vendor SDK or real provider wired in
+anywhere.
 
 ## Folder structure
 
@@ -28,11 +32,12 @@ backend/app/llm/
 
 Real prompt files do **not** live in this package. Per ADR 003 §3, those
 belong to the Communication Intelligence Engine, now at
-`app/analysis/reasoning_pass/prompts/analysis/` (six real files, one per
-Sprint 4.5 reasoning module — `structure_v1.md`, `clarity_v1.md`,
-`logical_flow_v1.md`, `topic_drift_v1.md`, `confidence_v1.md`,
-`conciseness_v1.md` — plus reserved-empty `prompts/coaching/` and
-`prompts/rewrite/`). This package's own `backend/tests/fixtures/prompts/`
+`app/analysis/reasoning_pass/prompts/analysis/` — as of Sprint 4.5.1, one
+combined file, `reasoning_pass_v1.md`, covering all six reasoning
+dimensions in a single prompt (replacing the six separate per-dimension
+files Sprint 4.5 originally shipped), plus reserved-empty
+`prompts/coaching/` and `prompts/rewrite/`. This package's own
+`backend/tests/fixtures/prompts/`
 files remain test fixtures only, used to prove `PromptLoader`/
 `PromptRegistry` work in isolation — explicitly labeled as fixtures in
 their own file headers, not real reasoning-module content. Nothing in
@@ -172,14 +177,13 @@ anything that isn't already an `LLMError` and reclassifies it as
 `LLMProviderError` — a provider implementation is never expected to know
 about this package's own error hierarchy.
 
-## What this layer still does not include, as of Sprint 4.5
+## What this layer still does not include, as of Sprint 4.5.1
 
 Still no concrete provider (OpenAI/Anthropic/Gemini/Ollama/local), no API
 keys, and no provider-selection wiring in `app/core/dependencies.py` —
-every reasoning module built so far is tested exclusively against a fake
-`LLMReasoner`/`LLMProvider`, never a real one. Wiring in a real provider,
-and the batching mechanism ADR 003 §1 separately requires (one combined
-LLM call across the six reasoning modules, instead of six independent
-calls — see `app/analysis/README.md`'s "The batching gap" for the full,
-disclosed explanation of why Sprint 4.5 did not build this), are both
-explicitly left for a future sprint.
+`ReasoningPass` is tested exclusively against a fake `LLMReasoner`,
+never a real one. The batching mechanism ADR 003 §1 required (one
+combined LLM call across the six reasoning dimensions, instead of six
+independent calls) is no longer missing — Sprint 4.5.1 built it, see
+`app/analysis/README.md`'s "Batching (Sprint 4.5.1)" section. Wiring in
+a real provider remains explicitly left for a future sprint.

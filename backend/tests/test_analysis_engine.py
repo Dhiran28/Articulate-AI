@@ -22,9 +22,45 @@ from app.analysis.models import (
     ReasoningResult,
     ResultMetadata,
 )
+from app.analysis.modules.clarity import ClarityModule
+from app.analysis.modules.conciseness import ConcisenessModule
+from app.analysis.modules.confidence import ConfidenceModule
+from app.analysis.modules.logical_flow import LogicalFlowModule
+from app.analysis.modules.structure import StructureModule
+from app.analysis.modules.topic_drift import TopicDriftModule
+from app.analysis.reasoning_pass.batch import BatchedReasoningResult, ReasoningPass
 from app.analysis.registry import DuplicateModuleError, ModuleRegistry
+from app.llm.errors import LLMTimeoutError
 from app.transcription.models import RawTranscriptionResult, TranscriptSegment
 from app.transcript_processing.processor import TranscriptProcessor
+
+ALL_SIX_REASONING_MODULE_CLASSES = [
+    StructureModule,
+    ClarityModule,
+    LogicalFlowModule,
+    TopicDriftModule,
+    ConfidenceModule,
+    ConcisenessModule,
+]
+
+
+def _full_batch_result() -> BatchedReasoningResult:
+    return BatchedReasoningResult(**{key: ReasoningResult(label="ok") for key in BatchedReasoningResult.model_fields})
+
+
+class FakeReasoningPassLLMReasoner:
+    """Records every call; returns a canned BatchedReasoningResult or raises a canned LLMError."""
+
+    def __init__(self, result: BatchedReasoningResult | None = None, error: Exception | None = None) -> None:
+        self._result = result
+        self._error = error
+        self.calls: list[tuple[str, dict]] = []
+
+    async def reason(self, prompt_id: str, context: dict, schema: type) -> BatchedReasoningResult:
+        self.calls.append((prompt_id, context))
+        if self._error is not None:
+            raise self._error
+        return self._result if self._result is not None else _full_batch_result()
 
 
 def _transcript(text: str = "So, um, I think the plan is solid and we should move forward with it."):
@@ -196,7 +232,12 @@ class TestEmptyRegistryBehaviour:
 
 class TestModuleFailureIsolation:
     async def test_a_crashing_module_does_not_affect_the_others(self) -> None:
-        registry = ModuleRegistry()
+        # A ReasoningPass is configured so "healthy_two" (a REASONING-type
+        # fake) actually gets to run at all under Sprint 4.5.1's registry
+        # — otherwise it would fail with NO_PROVIDER_CONFIGURED before
+        # this test ever exercises the crash-isolation behavior it's
+        # actually testing.
+        registry = ModuleRegistry(reasoning_pass=ReasoningPass(FakeReasoningPassLLMReasoner()))
         registry.register(FakeMetricModule("healthy_one"))
         registry.register(FakeCrashingModule("crasher"))
         registry.register(FakeReasoningModule("healthy_two"))
@@ -241,7 +282,12 @@ class TestAnalysisContextPropagation:
     """
 
     async def test_a_reasoning_module_receives_completed_metric_results(self) -> None:
-        registry = ModuleRegistry()
+        # Sprint 4.5.1: a REASONING-type module only has its analyze()
+        # called at all once a ReasoningPass is configured and succeeds
+        # (see TestReasoningPassIntegration) — a plain fake reasoning
+        # module needs one wired up here too, even though this fake
+        # itself never reads the batched result.
+        registry = ModuleRegistry(reasoning_pass=ReasoningPass(FakeReasoningPassLLMReasoner()))
         registry.register(FakeMetricModule("fake_metric"))
         registry.register(FakeContextReadingModule("reader"))
 
@@ -289,12 +335,127 @@ class TestAnalysisContextPropagation:
                     reasoning=ReasoningResult(label=context.reasoning_context.get("speaker_role", "unset")),
                 )
 
-        registry = ModuleRegistry()
+        # See the comment on test_a_reasoning_module_receives_completed_metric_results
+        # above — a REASONING-type fake needs a ReasoningPass configured
+        # to run at all under Sprint 4.5.1's registry.
+        registry = ModuleRegistry(reasoning_pass=ReasoningPass(FakeReasoningPassLLMReasoner()))
         registry.register(FakeReasoningContextReader())
 
         results = await registry.execute(_transcript(), reasoning_context={"speaker_role": "presenter"})
 
         assert results[0].reasoning.label == "presenter"
+
+
+class TestReasoningPassIntegration:
+    """
+    Sprint 4.5.1: ModuleRegistry now owns calling ReasoningPass — at
+    most once per execute() call, regardless of how many REASONING
+    modules are registered — and translating its result (or failure)
+    into every registered REASONING module's own ModuleResult.
+    """
+
+    async def test_only_one_llm_call_happens_no_matter_how_many_reasoning_modules_are_registered(self) -> None:
+        reasoner = FakeReasoningPassLLMReasoner()
+        registry = ModuleRegistry(reasoning_pass=ReasoningPass(reasoner))
+        for module_class in ALL_SIX_REASONING_MODULE_CLASSES:
+            registry.register(module_class())
+
+        results = await registry.execute(_transcript())
+
+        assert len(reasoner.calls) == 1
+        assert len(results) == 6
+        assert all(r.status == ModuleStatus.OK for r in results)
+
+    async def test_each_reasoning_module_gets_its_own_correct_section(self) -> None:
+        reasoner = FakeReasoningPassLLMReasoner(
+            result=BatchedReasoningResult(
+                structure=ReasoningResult(label="structure_label"),
+                clarity=ReasoningResult(label="clarity_label"),
+                logical_flow=ReasoningResult(label="logical_flow_label"),
+                topic_drift=ReasoningResult(label="topic_drift_label"),
+                confidence=ReasoningResult(label="confidence_label"),
+                conciseness=ReasoningResult(label="conciseness_label"),
+            )
+        )
+        registry = ModuleRegistry(reasoning_pass=ReasoningPass(reasoner))
+        for module_class in ALL_SIX_REASONING_MODULE_CLASSES:
+            registry.register(module_class())
+
+        results = {r.metadata.module_name: r for r in await registry.execute(_transcript())}
+
+        assert results["structure"].reasoning.label == "structure_label"
+        assert results["clarity"].reasoning.label == "clarity_label"
+        assert results["conciseness"].reasoning.label == "conciseness_label"
+
+    async def test_metric_modules_are_unaffected_by_reasoning_pass_wiring(self) -> None:
+        reasoner = FakeReasoningPassLLMReasoner()
+        registry = ModuleRegistry(reasoning_pass=ReasoningPass(reasoner))
+        registry.register(FakeMetricModule("a_metric"))
+        registry.register(StructureModule())
+
+        results = {r.metadata.module_name: r for r in await registry.execute(_transcript())}
+
+        assert results["a_metric"].status == ModuleStatus.OK
+        assert results["structure"].status == ModuleStatus.OK
+
+    async def test_no_reasoning_pass_configured_fails_every_reasoning_module_without_calling_analyze(self) -> None:
+        registry = ModuleRegistry()  # no reasoning_pass
+        registry.register(FakeMetricModule("a_metric"))
+        registry.register(StructureModule())
+        registry.register(ClarityModule())
+
+        results = {r.metadata.module_name: r for r in await registry.execute(_transcript())}
+
+        assert results["a_metric"].status == ModuleStatus.OK
+        assert results["structure"].status == ModuleStatus.FAILED
+        assert results["structure"].error.reason == AnalysisErrorReason.NO_PROVIDER_CONFIGURED
+        assert results["clarity"].status == ModuleStatus.FAILED
+        assert results["clarity"].error.reason == AnalysisErrorReason.NO_PROVIDER_CONFIGURED
+
+    async def test_a_failed_batch_call_fails_every_reasoning_module_together(self) -> None:
+        reasoner = FakeReasoningPassLLMReasoner(error=LLMTimeoutError("took too long"))
+        registry = ModuleRegistry(reasoning_pass=ReasoningPass(reasoner))
+        registry.register(FakeMetricModule("a_metric"))
+        for module_class in ALL_SIX_REASONING_MODULE_CLASSES:
+            registry.register(module_class())
+
+        results = {r.metadata.module_name: r for r in await registry.execute(_transcript())}
+
+        # Metric modules are unaffected — an AnalysisReport from a batch
+        # failure is never entirely empty (ADR 003 §7).
+        assert results["a_metric"].status == ModuleStatus.OK
+        # Every reasoning module fails together, with the same
+        # translated reason, and the reasoner was only ever called once.
+        for module_class in ALL_SIX_REASONING_MODULE_CLASSES:
+            name = module_class().module_name
+            assert results[name].status == ModuleStatus.FAILED
+            assert results[name].error.reason == AnalysisErrorReason.LLM_TIMEOUT
+        assert len(reasoner.calls) == 1
+
+    async def test_speaking_pace_metric_reaches_the_batched_prompt_context(self) -> None:
+        # Proves the metrics-before-reasoning ordering (Sprint 4.5) still
+        # feeds into the *batched* call correctly (Sprint 4.5.1), not
+        # just into an individual module's own context as it did before.
+        from app.analysis.modules.speaking_pace import SpeakingPaceModule
+
+        reasoner = FakeReasoningPassLLMReasoner()
+        registry = ModuleRegistry(reasoning_pass=ReasoningPass(reasoner))
+        registry.register(SpeakingPaceModule())
+        registry.register(ConcisenessModule())
+
+        await registry.execute(_transcript())
+
+        _, template_context = reasoner.calls[0]
+        assert template_context["words_per_minute"] != "unknown"
+
+    async def test_no_reasoning_modules_registered_means_no_llm_call_at_all(self) -> None:
+        reasoner = FakeReasoningPassLLMReasoner()
+        registry = ModuleRegistry(reasoning_pass=ReasoningPass(reasoner))
+        registry.register(FakeMetricModule("a_metric"))
+
+        await registry.execute(_transcript())
+
+        assert len(reasoner.calls) == 0
 
 
 class TestModuleResultValidation:

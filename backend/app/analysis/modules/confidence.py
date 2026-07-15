@@ -1,85 +1,35 @@
 """
-ConfidenceModule (Sprint 4.5) — semantic reasoning module.
+ConfidenceModule (Sprint 4.5, rewritten Sprint 4.5.1) — semantic
+reasoning module.
 
-Judges how confidently the speaker comes across. Confidence is
-ultimately a semantic read (tone, word choice, framing), so the actual
-judgment still flows through the shared LLMReasoner like every other
-reasoning module here — but this module is deliberately given one small
-deterministic assist no other reasoning module has: a local, regex-based
-count of hedging language ("I think," "sort of," "maybe," "kind of," ...)
-computed here, in Python, with no LLM call. That count and a handful of
-example hedges are handed to the prompt as extra context, giving the
-model concrete textual evidence to reason over rather than asking it to
-both find and judge the hedging in one step.
+Judges how confidently the speaker comes across.
 
-This sub-signal is deliberately *not* a separate output field — it never
-appears anywhere in the returned ModuleResult; it exists purely to
-enrich the LLM prompt's `$hedge_signal` variable. The module still
-returns nothing but a ReasoningResult, same as the other five, keeping
-"no scores" intact: the hedge count is a hint fed into the model's
-reasoning, not a metric this module reports on its own authority.
+Sprint 4.5.1 change: this module no longer calls an LLM itself, and no
+longer computes its own hedge-word sub-signal either — both moved into
+`ReasoningPass`/`signals.py` (`compute_hedge_signal`), since the hedge
+count now feeds one combined prompt, not a per-module one. This module
+now does exactly what every other section-reading module does: reads
+its own `confidence` section out of the `BatchedReasoningResult` that
+`ReasoningPass` produced once for all six reasoning dimensions — see
+`modules/section_reasoning_base.py` for the shared mechanics.
 """
 
-import re
 from typing import Any
 
-from app.llm.reasoner import LLMReasoner
-
-from ..models import AnalysisContext
-from .reasoning_base import _BaseReasoningModule
-
-# Deliberately small and conservative — false positives (flagging a
-# confident, precise use of "I think" as hedging) are worse for this
-# module's purpose than a few missed hedges, since this signal is meant
-# to sharpen the LLM's reasoning, not substitute for it.
-_DEFAULT_HEDGE_PHRASES = (
-    "i think",
-    "i guess",
-    "i suppose",
-    "sort of",
-    "kind of",
-    "maybe",
-    "probably",
-    "i'm not sure",
-    "not sure",
-    "might be",
-    "could be",
-    "i feel like",
-)
+from .section_reasoning_base import _SectionReasoningModule
 
 
-class ConfidenceModule(_BaseReasoningModule):
+class ConfidenceModule(_SectionReasoningModule):
     module_name = "confidence"
-    prompt_id = "confidence_v1"
+    section_key = "confidence"
 
-    def __init__(self, reasoner: LLMReasoner, hedge_phrases: tuple[str, ...] = _DEFAULT_HEDGE_PHRASES) -> None:
-        super().__init__(reasoner)
-        self._hedge_phrases = hedge_phrases
-        self._hedge_pattern = re.compile(
-            r"\b(" + "|".join(re.escape(p) for p in hedge_phrases) + r")\b", re.IGNORECASE
-        )
+    def __init__(self) -> None:
         self.metadata: dict[str, Any] = {
-            "version": "0.1.0",
+            "version": "0.2.0",
             "description": (
-                "Judges how confidently the speaker comes across, assisted by a "
-                "deterministic local hedge-word count fed into the prompt as context."
+                "Judges how confidently the speaker comes across. The deterministic "
+                "hedge-word signal that used to be computed here now lives in "
+                "reasoning_pass/signals.py, feeding the one combined prompt instead."
             ),
-            "prompt_id": self.prompt_id,
-            "hedge_phrase_count": len(hedge_phrases),
-        }
-
-    def _build_template_context(self, context: AnalysisContext) -> dict[str, Any]:
-        text = context.transcript.processed_transcript.text
-        matches = self._hedge_pattern.findall(text)
-
-        hedge_count = len(matches)
-        # A short, deduplicated sample rather than every match — enough
-        # for the model to see concrete examples without bloating the
-        # prompt with a long, repetitive list on a hedge-heavy transcript.
-        example_hedges = sorted({m.lower() for m in matches})[:5]
-
-        return {
-            "transcript": text,
-            "hedge_word_count": str(hedge_count),
-            "hedge_word_examples": ", ".join(example_hedges) if example_hedges else "none found",
+            "section_key": self.section_key,
         }

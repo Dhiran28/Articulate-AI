@@ -1,32 +1,28 @@
 """
-LogicalFlowModule (Sprint 4.5) — semantic reasoning module.
+LogicalFlowModule (Sprint 4.5, rewritten Sprint 4.5.1) — semantic
+reasoning module.
 
-Judges whether one idea leads to the next in a way that makes logical
-sense — distinct from StructureModule (does the transcript have a
-recognizable shape at all) by focusing on the connective tissue between
-consecutive points rather than the overall shape. Needs only the
-transcript text.
+Judges whether consecutive ideas in the transcript connect logically.
+
+Sprint 4.5.1 change: this module no longer calls an LLM itself. It
+reads its own `logical_flow` section out of the `BatchedReasoningResult`
+that `ReasoningPass` produced once for all six reasoning dimensions —
+see `modules/section_reasoning_base.py` for the shared mechanics, and
+`reasoning_pass/batch.py` for where the one actual LLM call happens.
 """
 
 from typing import Any
 
-from app.llm.reasoner import LLMReasoner
-
-from ..models import AnalysisContext
-from .reasoning_base import _BaseReasoningModule
+from .section_reasoning_base import _SectionReasoningModule
 
 
-class LogicalFlowModule(_BaseReasoningModule):
+class LogicalFlowModule(_SectionReasoningModule):
     module_name = "logical_flow"
-    prompt_id = "logical_flow_v1"
+    section_key = "logical_flow"
 
-    def __init__(self, reasoner: LLMReasoner) -> None:
-        super().__init__(reasoner)
+    def __init__(self) -> None:
         self.metadata: dict[str, Any] = {
-            "version": "0.1.0",
+            "version": "0.2.0",
             "description": "Judges whether consecutive ideas in the transcript connect logically.",
-            "prompt_id": self.prompt_id,
+            "section_key": self.section_key,
         }
-
-    def _build_template_context(self, context: AnalysisContext) -> dict[str, Any]:
-        return {"transcript": context.transcript.processed_transcript.text}

@@ -1,16 +1,15 @@
 """
-Tests for the six semantic Reasoning modules (Sprint 4.5): StructureModule,
-ClarityModule, LogicalFlowModule, TopicDriftModule, ConfidenceModule,
-ConcisenessModule, plus their shared orchestration in
-app/analysis/modules/reasoning_base.py.
+Tests for the six section-reading Reasoning modules (Sprint 4.5.1):
+StructureModule, ClarityModule, LogicalFlowModule, TopicDriftModule,
+ConfidenceModule, ConcisenessModule.
 
-No real LLM call is made anywhere in this file. FakeLLMReasoner is a
-plain in-memory stand-in satisfying the LLMReasoner Protocol
-(app/llm/reasoner.py) — the same "fake the seam, not the internals"
-approach test_llm_reasoner.py uses for LLMProvider and
-test_transcription.py uses for TranscriptionProvider. Every reasoning
-module is exercised only against this fake, never against
-DefaultLLMReasoner or a real provider.
+Sprint 4.5.1 changed what these modules do: none of them call an LLM or
+build a prompt anymore (that's `ReasoningPass`'s job now — see
+test_reasoning_pass.py). Each one just reads its own section out of a
+`BatchedReasoningResult` that's expected to already be sitting in
+`AnalysisContext.reasoning_context[REASONING_PASS_RESULT_KEY]` — so
+these tests exercise that read-and-wrap logic directly, with no fake
+LLM anywhere in this file at all.
 
 See tests/README.md for how this file fits into the overall suite.
 """
@@ -18,32 +17,16 @@ See tests/README.md for how this file fits into the overall suite.
 import pytest
 
 from app.analysis.errors import AnalysisErrorReason
-from app.analysis.models import (
-    AnalysisContext,
-    MetricResult,
-    ModuleErrorDetail,
-    ModuleResult,
-    ModuleStatus,
-    ModuleType,
-    ReasoningResult,
-    ResultMetadata,
-)
+from app.analysis.models import AnalysisContext, ModuleStatus, ModuleType, ReasoningResult
 from app.analysis.modules.base import AnalysisModule
 from app.analysis.modules.clarity import ClarityModule
 from app.analysis.modules.conciseness import ConcisenessModule
 from app.analysis.modules.confidence import ConfidenceModule
 from app.analysis.modules.logical_flow import LogicalFlowModule
+from app.analysis.modules.section_reasoning_base import REASONING_PASS_RESULT_KEY
 from app.analysis.modules.structure import StructureModule
 from app.analysis.modules.topic_drift import TopicDriftModule
-from app.llm.errors import (
-    LLMError,
-    LLMInvalidResponseError,
-    LLMProviderError,
-    LLMSchemaError,
-    LLMTimeoutError,
-    NoProviderConfiguredError,
-    PromptNotFoundError,
-)
+from app.analysis.reasoning_pass.batch import BatchedReasoningResult
 from app.transcription.models import RawTranscriptionResult, TranscriptSegment
 from app.transcript_processing.processor import TranscriptProcessor
 
@@ -55,41 +38,6 @@ ALL_MODULE_CLASSES = [
     ConfidenceModule,
     ConcisenessModule,
 ]
-
-# LLMErrorReason and AnalysisErrorReason share identical string values
-# (see app/analysis/errors.py's Sprint 4.5 comment) — this table is what
-# reasoning_base.py's translation is expected to produce, one exception
-# class at a time.
-LLM_ERROR_TO_ANALYSIS_REASON = [
-    (LLMTimeoutError, AnalysisErrorReason.LLM_TIMEOUT),
-    (LLMProviderError, AnalysisErrorReason.LLM_PROVIDER_ERROR),
-    (LLMInvalidResponseError, AnalysisErrorReason.LLM_INVALID_RESPONSE),
-    (LLMSchemaError, AnalysisErrorReason.LLM_SCHEMA_ERROR),
-    (PromptNotFoundError, AnalysisErrorReason.PROMPT_NOT_FOUND),
-    (NoProviderConfiguredError, AnalysisErrorReason.NO_PROVIDER_CONFIGURED),
-]
-
-
-class FakeLLMReasoner:
-    """
-    Satisfies the LLMReasoner Protocol without touching PromptRegistry,
-    PromptLoader, or any provider. Configured with either a canned
-    ReasoningResult to return or an LLMError to raise, and records every
-    (prompt_id, context) pair it was actually called with so tests can
-    assert on what a module put into its own template context.
-    """
-
-    def __init__(self, result: ReasoningResult | None = None, error: LLMError | None = None) -> None:
-        self._result = result
-        self._error = error
-        self.calls: list[tuple[str, dict]] = []
-
-    async def reason(self, prompt_id: str, context: dict, schema: type) -> ReasoningResult:
-        self.calls.append((prompt_id, context))
-        if self._error is not None:
-            raise self._error
-        assert schema is ReasoningResult  # every reasoning module uses the one shared schema
-        return self._result if self._result is not None else ReasoningResult(label="ok")
 
 
 def _transcript(text: str = "So, I think the plan is solid and we should move forward with it."):
@@ -103,10 +51,19 @@ def _transcript(text: str = "So, I think the plan is solid and we should move fo
     return TranscriptProcessor().process(raw)
 
 
-def _context(transcript_result=None, metrics: dict | None = None) -> AnalysisContext:
+def _batch(**overrides: ReasoningResult) -> BatchedReasoningResult:
+    """A fully-populated BatchedReasoningResult, each section defaulting
+    to a distinct, easily-asserted-on label unless overridden."""
+    defaults = {key: ReasoningResult(label=f"{key}_label") for key in BatchedReasoningResult.model_fields}
+    defaults.update(overrides)
+    return BatchedReasoningResult(**defaults)
+
+
+def _context(*, batch: BatchedReasoningResult | None = None, transcript_result=None) -> AnalysisContext:
+    reasoning_context = {} if batch is None else {REASONING_PASS_RESULT_KEY: batch}
     return AnalysisContext(
         transcript=transcript_result if transcript_result is not None else _transcript(),
-        metrics=metrics or {},
+        reasoning_context=reasoning_context,
     )
 
 
@@ -115,217 +72,100 @@ class TestInterfaceConformance:
 
     @pytest.mark.parametrize("module_class", ALL_MODULE_CLASSES)
     def test_satisfies_analysis_module_protocol(self, module_class) -> None:
-        module = module_class(FakeLLMReasoner())
+        module = module_class()
         assert isinstance(module, AnalysisModule)
         assert module.module_type == ModuleType.REASONING
         assert isinstance(module.metadata, dict)
         assert isinstance(module.module_name, str) and module.module_name
 
     @pytest.mark.parametrize("module_class", ALL_MODULE_CLASSES)
-    def test_module_names_are_unique(self, module_class) -> None:
-        # A duplicate module_name across these six would silently break
-        # ModuleRegistry registration (DuplicateModuleError) the moment
-        # a real caller tries to register all six together.
-        names = {m(FakeLLMReasoner()).module_name for m in ALL_MODULE_CLASSES}
+    def test_no_longer_requires_an_llm_reasoner_to_construct(self, module_class) -> None:
+        # Sprint 4.5.1's whole point: these modules don't call an LLM
+        # themselves anymore, so constructing one takes no arguments at
+        # all now (contrast with Sprint 4.5's `module_class(reasoner)`).
+        module = module_class()
+        assert not hasattr(module, "_reasoner")
+
+    def test_module_names_are_unique(self) -> None:
+        names = {m().module_name for m in ALL_MODULE_CLASSES}
         assert len(names) == len(ALL_MODULE_CLASSES)
+
+    def test_every_module_names_a_real_batched_reasoning_result_field(self) -> None:
+        # section_key must always resolve to a real field on
+        # BatchedReasoningResult, or every one of these modules would
+        # silently fail at runtime — checked once, structurally, here.
+        for module_class in ALL_MODULE_CLASSES:
+            module = module_class()
+            assert module.section_key in BatchedReasoningResult.model_fields
 
 
 class TestHappyPath:
     @pytest.mark.parametrize("module_class", ALL_MODULE_CLASSES)
-    async def test_returns_an_ok_result_carrying_the_reasoner_output(self, module_class) -> None:
-        reasoner = FakeLLMReasoner(result=ReasoningResult(label="clear", explanation="well organized"))
-        module = module_class(reasoner)
+    async def test_returns_its_own_section_of_the_batched_result(self, module_class) -> None:
+        module = module_class()
+        expected_section = ReasoningResult(label="a_specific_label", explanation="specific explanation")
+        batch = _batch(**{module.section_key: expected_section})
 
-        result = await module.analyze(_context())
+        result = await module.analyze(_context(batch=batch))
 
-        assert isinstance(result, ModuleResult)
         assert result.status == ModuleStatus.OK
         assert result.error is None
         assert result.metric is None
-        assert result.reasoning == ReasoningResult(label="clear", explanation="well organized")
+        assert result.reasoning == expected_section
         assert result.metadata.module_name == module.module_name
         assert result.metadata.module_type == ModuleType.REASONING
 
     @pytest.mark.parametrize("module_class", ALL_MODULE_CLASSES)
-    async def test_calls_the_reasoner_with_its_own_prompt_id(self, module_class) -> None:
-        reasoner = FakeLLMReasoner()
-        module = module_class(reasoner)
+    async def test_does_not_leak_another_modules_section(self, module_class) -> None:
+        module = module_class()
+        own_section = ReasoningResult(label="mine")
+        batch = _batch(**{module.section_key: own_section})
+        # Every other section is deliberately given a different label —
+        # if a module ever read the wrong field, this would catch it.
+        for key in BatchedReasoningResult.model_fields:
+            if key != module.section_key:
+                assert getattr(batch, key).label != "mine"
 
-        await module.analyze(_context())
+        result = await module.analyze(_context(batch=batch))
 
-        assert len(reasoner.calls) == 1
-        prompt_id, _ = reasoner.calls[0]
-        assert prompt_id == module.prompt_id
-
-    @pytest.mark.parametrize("module_class", ALL_MODULE_CLASSES)
-    async def test_transcript_text_reaches_the_template_context(self, module_class) -> None:
-        reasoner = FakeLLMReasoner()
-        module = module_class(reasoner)
-        transcript = _transcript(text="A very specific sentence about quarterly planning.")
-
-        await module.analyze(_context(transcript_result=transcript))
-
-        _, template_context = reasoner.calls[0]
-        assert "A very specific sentence about quarterly planning." in template_context["transcript"]
+        assert result.reasoning.label == "mine"
 
     @pytest.mark.parametrize("module_class", ALL_MODULE_CLASSES)
     async def test_never_produces_a_metric_or_a_score(self, module_class) -> None:
-        # Structural guarantee, not just a convention: ReasoningResult
-        # (models.py) has no numeric score field at all, so this is
-        # really asserting the shared schema shape, but doing it via
-        # every module's actual output keeps the guarantee end-to-end.
-        reasoner = FakeLLMReasoner(result=ReasoningResult(label="x"))
-        module = module_class(reasoner)
-
-        result = await module.analyze(_context())
+        module = module_class()
+        result = await module.analyze(_context(batch=_batch()))
 
         assert result.metric is None
         assert not hasattr(result.reasoning, "score")
 
 
-class TestErrorMapping:
+class TestNoReasoningPassResultAvailable:
     """
-    Every LLMError subclass the shared LLMReasoner can raise must map to
-    the matching AnalysisErrorReason, and the module must return a
-    `failed` ModuleResult rather than let the exception propagate — the
-    same per-module isolation ADR 003 §7 requires of Metric modules,
-    now proven for Reasoning modules too.
+    The registry only calls a REASONING module's analyze() at all once a
+    batched result is ready (see registry.py) — but a module is still
+    expected to fail gracefully, not crash, if it's ever invoked
+    directly without one (e.g. a stray unit test, or future misuse).
     """
 
     @pytest.mark.parametrize("module_class", ALL_MODULE_CLASSES)
-    @pytest.mark.parametrize("error_class,expected_reason", LLM_ERROR_TO_ANALYSIS_REASON)
-    async def test_llm_error_becomes_a_failed_module_result(self, module_class, error_class, expected_reason) -> None:
-        reasoner = FakeLLMReasoner(error=error_class("boom"))
-        module = module_class(reasoner)
+    async def test_missing_batch_result_is_a_failed_result_not_a_crash(self, module_class) -> None:
+        module = module_class()
 
-        result = await module.analyze(_context())
+        result = await module.analyze(_context(batch=None))
 
         assert result.status == ModuleStatus.FAILED
         assert result.reasoning is None
-        assert result.metric is None
-        assert result.error is not None
-        assert result.error.reason == expected_reason
-        assert result.error.message == "boom"
+        assert result.error.reason == AnalysisErrorReason.NO_PROVIDER_CONFIGURED
 
-    async def test_a_non_llm_exception_still_propagates(self) -> None:
-        # reasoning_base.py only catches LLMError — anything else is a
-        # genuine bug and should surface, not be silently swallowed as
-        # if it were a classified LLM failure. (ModuleRegistry, not this
-        # class, is what converts an unexpected exception into a
-        # MODULE_ERROR result — see test_analysis_engine.py's
-        # TestModuleFailureIsolation.)
-        class ExplodingReasoner:
-            async def reason(self, prompt_id, context, schema):
-                raise RuntimeError("not an LLMError at all")
-
-        module = StructureModule(ExplodingReasoner())
-        with pytest.raises(RuntimeError):
-            await module.analyze(_context())
-
-
-class TestConfidenceModuleHedgeSignal:
-    """
-    ConfidenceModule's one piece of module-specific logic: a local,
-    deterministic hedge-word count computed without any LLM call, fed
-    into the prompt as extra context.
-    """
-
-    async def test_hedge_words_are_counted_and_passed_to_the_prompt(self) -> None:
-        reasoner = FakeLLMReasoner()
-        module = ConfidenceModule(reasoner)
-        transcript = _transcript(text="I think maybe this is sort of the right plan, I guess.")
-
-        await module.analyze(_context(transcript_result=transcript))
-
-        _, template_context = reasoner.calls[0]
-        assert template_context["hedge_word_count"] == "4"  # "I think", "maybe", "sort of", "I guess"
-        assert "maybe" in template_context["hedge_word_examples"]
-
-    async def test_no_hedges_reports_zero_and_none_found(self) -> None:
-        reasoner = FakeLLMReasoner()
-        module = ConfidenceModule(reasoner)
-        transcript = _transcript(text="The plan is solid and we will proceed on schedule.")
-
-        await module.analyze(_context(transcript_result=transcript))
-
-        _, template_context = reasoner.calls[0]
-        assert template_context["hedge_word_count"] == "0"
-        assert template_context["hedge_word_examples"] == "none found"
-
-    async def test_hedge_count_never_appears_in_the_returned_result(self) -> None:
-        # The sub-signal is prompt context only — it must never leak into
-        # the module's actual output, which stays a plain ReasoningResult.
-        reasoner = FakeLLMReasoner(result=ReasoningResult(label="confident"))
-        module = ConfidenceModule(reasoner)
-        transcript = _transcript(text="I think maybe this is sort of right.")
-
-        result = await module.analyze(_context(transcript_result=transcript))
-
-        assert result.reasoning == ReasoningResult(label="confident")
-
-
-class TestConcisenessModuleMetricHints:
-    """
-    ConcisenessModule's one piece of module-specific logic: reading
-    context.metrics (populated by ModuleRegistry's two-phase execution,
-    see registry.py) for speaking_pace's already-computed figures, and
-    degrading gracefully when that metric didn't run or failed.
-    """
-
-    def _speaking_pace_result(self, *, words_per_minute=142.0, average_sentence_length=9.5) -> ModuleResult:
-        return ModuleResult(
-            metadata=ResultMetadata(module_name="speaking_pace", module_type=ModuleType.METRIC),
-            status=ModuleStatus.OK,
-            metric=MetricResult(
-                value=words_per_minute,
-                unit="words_per_minute",
-                details={"average_sentence_length": average_sentence_length},
-            ),
+    @pytest.mark.parametrize("module_class", ALL_MODULE_CLASSES)
+    async def test_wrong_type_in_the_reasoning_context_slot_is_a_failed_result(self, module_class) -> None:
+        module = module_class()
+        context = AnalysisContext(
+            transcript=_transcript(),
+            reasoning_context={REASONING_PASS_RESULT_KEY: "not a BatchedReasoningResult"},
         )
 
-    async def test_uses_speaking_pace_metrics_when_present(self) -> None:
-        reasoner = FakeLLMReasoner()
-        module = ConcisenessModule(reasoner)
-        context = _context(metrics={"speaking_pace": self._speaking_pace_result()})
+        result = await module.analyze(context)
 
-        await module.analyze(context)
-
-        _, template_context = reasoner.calls[0]
-        assert template_context["words_per_minute"] == "142.0"
-        assert template_context["average_sentence_length"] == "9.5"
-
-    async def test_falls_back_to_unknown_when_speaking_pace_did_not_run(self) -> None:
-        reasoner = FakeLLMReasoner()
-        module = ConcisenessModule(reasoner)
-
-        await module.analyze(_context(metrics={}))
-
-        _, template_context = reasoner.calls[0]
-        assert template_context["words_per_minute"] == "unknown"
-        assert template_context["average_sentence_length"] == "unknown"
-
-    async def test_falls_back_to_unknown_when_speaking_pace_failed(self) -> None:
-        reasoner = FakeLLMReasoner()
-        module = ConcisenessModule(reasoner)
-        failed_pace = ModuleResult(
-            metadata=ResultMetadata(module_name="speaking_pace", module_type=ModuleType.METRIC),
-            status=ModuleStatus.FAILED,
-            error=ModuleErrorDetail(reason=AnalysisErrorReason.METRIC_INPUT_INVALID, message="no duration"),
-        )
-
-        await module.analyze(_context(metrics={"speaking_pace": failed_pace}))
-
-        _, template_context = reasoner.calls[0]
-        assert template_context["words_per_minute"] == "unknown"
-
-    async def test_never_calls_speaking_pace_module_itself(self) -> None:
-        # ConcisenessModule only reads the already-populated
-        # context.metrics dict — it has no reference to SpeakingPaceModule
-        # at all, so there is nothing to call even if it wanted to. This
-        # test documents that architectural guarantee via absence: the
-        # module works fine given only a plain dict, never a real module.
-        reasoner = FakeLLMReasoner()
-        module = ConcisenessModule(reasoner)
-        assert not hasattr(module, "speaking_pace_module")
-        assert not hasattr(module, "_speaking_pace")
-        await module.analyze(_context(metrics={"speaking_pace": self._speaking_pace_result()}))
+        assert result.status == ModuleStatus.FAILED
+        assert result.error.reason == AnalysisErrorReason.LLM_SCHEMA_ERROR

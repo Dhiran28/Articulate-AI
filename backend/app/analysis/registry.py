@@ -1,11 +1,14 @@
 import logging
 from typing import Any
 
+from app.llm.errors import LLMError
 from app.transcript_processing.models import TranscriptProcessingResult
 
 from .errors import AnalysisErrorReason
 from .modules.base import AnalysisModule
+from .modules.section_reasoning_base import REASONING_PASS_RESULT_KEY
 from .models import AnalysisContext, ModuleErrorDetail, ModuleResult, ModuleStatus, ModuleType, ResultMetadata
+from .reasoning_pass.batch import ReasoningPass
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +44,22 @@ class ModuleRegistry:
     rule rather than something a caller has to reason about separately.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, reasoning_pass: ReasoningPass | None = None) -> None:
         self._modules: dict[str, AnalysisModule] = {}
+        self._reasoning_pass = reasoning_pass
+        """
+        Sprint 4.5.1: the one shared component that makes the one LLM
+        call every REASONING module's result now comes from — see
+        `reasoning_pass/batch.py`. Optional and defaulting to `None`
+        (matching every other not-yet-wired-up dependency in this
+        codebase, e.g. `DefaultLLMReasoner`'s own `provider=None` guard)
+        so a registry with only Metric modules, or a test, never has to
+        construct one just to be valid. A registry with REASONING
+        modules registered but no `reasoning_pass` configured degrades
+        per-module (see `execute()`) rather than raising — the same
+        "partial results over a hard failure" principle ADR 003 §7
+        already applies to a crashing module.
+        """
 
     def register(self, module: AnalysisModule) -> None:
         """
@@ -86,29 +103,58 @@ class ModuleRegistry:
         Runs every registered module against `transcript` and returns one
         ModuleResult per module.
 
-        Sprint 4.5 change (disclosed breaking change to Sprint 4.2's flat
-        registration-order execution): this is now a two-phase run, not a
-        single pass.
+        Two-phase run (Sprint 4.5), now with a batched LLM step between
+        the two phases (Sprint 4.5.1):
 
           Phase 1 — every METRIC module runs first, in registration order,
           each given an AnalysisContext whose `metrics` dict is empty
           (nothing has run yet). Every METRIC result, keyed by
           module_name, is collected into a `metrics` dict as it completes.
 
+          Between phases — if any REASONING module is registered, this
+          registry runs `self._reasoning_pass` **exactly once** (not once
+          per module) and stashes its result into
+          `reasoning_context[REASONING_PASS_RESULT_KEY]` before phase 2
+          starts. Every REASONING module's own `analyze()` then simply
+          reads its own section back out — see
+          `modules/section_reasoning_base.py`. This is what "only one LLM
+          request per analysis" (Sprint 4.5.1) actually means at the
+          registry level: `ReasoningPass.run()` is called at most once
+          per `execute()` call, full stop, regardless of how many
+          REASONING modules are registered.
+
           Phase 2 — every non-METRIC module (i.e. REASONING) runs next, in
           registration order, each given an AnalysisContext whose
-          `metrics` dict is now fully populated with every METRIC result
-          from phase 1. This is what lets a Reasoning module (e.g. Sprint
-          4.5's ConcisenessModule) use deterministic signal like
-          speaking_pace's words-per-minute without calling that module
-          itself — it's simply handed the finished result.
+          `metrics` dict is fully populated from phase 1 and whose
+          `reasoning_context` carries the batched result from the step
+          above (when available).
 
-        The overall returned order is therefore "all METRIC results, then
-        all REASONING results" — no longer strict flat registration order
-        across types, though registration order is still preserved within
-        each phase. `reasoning_context` is passed straight through to
-        every module's AnalysisContext unchanged; it's an open
-        extensibility hook this registry doesn't interpret itself.
+        Two degraded paths, both per-module rather than a hard failure of
+        the whole request (ADR 003 §7's "partial results over an all-or-
+        nothing failure" principle):
+          - **No `reasoning_pass` configured** (`self._reasoning_pass is
+            None`) but REASONING modules are registered: each such module
+            gets a `failed` ModuleResult (`NO_PROVIDER_CONFIGURED`)
+            without `analyze()` ever being called — there's nothing
+            meaningful to hand it. METRIC modules are unaffected.
+          - **The one combined call itself fails** (`ReasoningPass.run()`
+            raises an `LLMError`): every currently-registered REASONING
+            module gets a `failed` ModuleResult carrying that same
+            translated reason (`LLMErrorReason` and `AnalysisErrorReason`
+            share identical string values — see errors.py), again without
+            `analyze()` being called. This is ADR 003 §7's named
+            "batch-level failure" tradeoff made real: one call failing
+            now fails every reasoning dimension together, in exchange for
+            the five-out-of-six-calls-saved cost/latency win the rest of
+            the time. METRIC modules are still unaffected either way — an
+            `AnalysisReport` from a batch failure is never entirely
+            empty.
+
+        The overall returned order is "all METRIC results, then all
+        REASONING results" — registration order preserved within each
+        phase. `reasoning_context` passed into this method is merged with
+        (and never overwrites anything other than) the reserved
+        `REASONING_PASS_RESULT_KEY` this registry itself writes.
 
         A module that raises never stops the others from running and
         never propagates out of this method (ADR 003 §7) — it's caught
@@ -118,8 +164,8 @@ class ModuleRegistry:
         """
         modules = self.discover()
         metric_modules = [m for m in modules if m.module_type is ModuleType.METRIC]
-        other_modules = [m for m in modules if m.module_type is not ModuleType.METRIC]
-        context_extras = reasoning_context or {}
+        reasoning_modules = [m for m in modules if m.module_type is not ModuleType.METRIC]
+        context_extras = dict(reasoning_context or {})
 
         results: list[ModuleResult] = []
         metrics: dict[str, ModuleResult] = {}
@@ -130,10 +176,46 @@ class ModuleRegistry:
             results.append(result)
             metrics[module.module_name] = result
 
+        if reasoning_modules:
+            batch_failure: ModuleErrorDetail | None = None
+
+            if self._reasoning_pass is None:
+                batch_failure = ModuleErrorDetail(
+                    reason=AnalysisErrorReason.NO_PROVIDER_CONFIGURED,
+                    message="No shared ReasoningPass was configured for this registry.",
+                )
+            else:
+                pre_batch_context = AnalysisContext(
+                    transcript=transcript, metrics=metrics, reasoning_context=context_extras
+                )
+                try:
+                    batched_result = await self._reasoning_pass.run(pre_batch_context)
+                except LLMError as exc:
+                    # See analysis/errors.py's Sprint 4.5 comment: the two
+                    # enums deliberately share identical string values, so
+                    # this is a direct, lossless one-line mapping.
+                    batch_failure = ModuleErrorDetail(
+                        reason=AnalysisErrorReason(exc.reason.value),
+                        message=exc.message,
+                    )
+                else:
+                    context_extras = {**context_extras, REASONING_PASS_RESULT_KEY: batched_result}
+
+            if batch_failure is not None:
+                for module in reasoning_modules:
+                    results.append(
+                        ModuleResult(
+                            metadata=ResultMetadata(module_name=module.module_name, module_type=module.module_type),
+                            status=ModuleStatus.FAILED,
+                            error=batch_failure,
+                        )
+                    )
+                return results
+
         reasoning_phase_context = AnalysisContext(
             transcript=transcript, metrics=metrics, reasoning_context=context_extras
         )
-        for module in other_modules:
+        for module in reasoning_modules:
             results.append(await self._run_one(module, reasoning_phase_context))
 
         return results
