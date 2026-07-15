@@ -3,6 +3,18 @@
 Tests for the Sprint 3 transcription pipeline: audio upload, Whisper
 transcription, transcript processing, and cross-cutting failure handling.
 
+**Catalog scope note:** this file's "Test files" section below was
+written for Sprint 3 and was not kept in lockstep with every test file
+added since (Sprint 4.2-4.5.1's Communication Intelligence Engine and
+LLM abstraction layer tests — `test_analysis_engine.py`,
+`test_metric_modules.py`, `test_llm_prompts.py`, `test_llm_reasoner.py`,
+`test_reasoning_modules.py`, `test_reasoning_pass.py`,
+`test_reasoning_pass_benchmarks.py`,
+`test_reasoning_base_escape_hatch.py` — aren't individually cataloged
+here, though every one of them is documented in its own module-level
+docstring). Milestone 5's own new test files are cataloged below,
+disclosed as a partial catalog rather than silently left incomplete.
+
 ## Running the tests
 
 ```bash
@@ -33,9 +45,10 @@ and after every test:
   `app.dependency_overrides` instead of relying on a real key.
 - Clears the `@lru_cache`'d singletons in `app/core/dependencies.py`
   (`get_settings`, `get_blob_store`, `get_record_store`,
-  `get_transcription_provider`) before and after each test, so cached
-  state from one test (an uploaded asset, a cached setting) can never
-  leak into another.
+  `get_transcription_provider`, and, as of Milestone 5,
+  `get_llm_provider` and `get_prompt_registry`) before and after each
+  test, so cached state from one test (an uploaded asset, a cached
+  setting) can never leak into another.
 - Clears `app.dependency_overrides` after each test, so an override set
   by one test doesn't affect the next.
 
@@ -128,6 +141,48 @@ tests are what would catch a regression of that bug in the future.
   `{"detail": {"error": "<reason>", "message": "<text>"}}` — and that
   the message never leaks raw exception text (no "Traceback", no
   exception class name, no `.py` file path).
+
+### Milestone 5 — Coaching, Scoring, Reporting, and `POST /analyze`
+
+- `test_scoring.py` — `app/scoring/`: `TestWeights` (the ten weights sum
+  to exactly 100.0, structural-thinking dimensions outweigh fluency
+  metrics), `TestDimensionScoreFunctions` (each of the four metric
+  formulas and the reasoning label-band mapping at their documented
+  boundary values — 0, ceiling, halfway), `TestScoringEngine` (a perfect
+  report scores 100, a missing/failed module's weight is redistributed
+  rather than zeroed, `NO_SCORABLE_MODULES` when nothing succeeded, and
+  a full transparency check that every `ModuleScore` field is populated).
+- `test_coaching.py` — `app/coaching/`: `TestCoachingEngineHappyPath`
+  (one LLM call, `coaching_v1` prompt id, the raw transcript never
+  reaches the prompt, only `ok` modules are serialized into it, failed
+  modules appear in `unavailable`), `TestCoachingEngineFailureModes`
+  (`NOTHING_TO_COACH` when every module failed or the report is empty,
+  `NO_PROVIDER_CONFIGURED` when `reasoner=None`, LLM errors mapped
+  through), `TestCommunicationSummaryGenerator` (whitespace
+  normalization, word-boundary truncation at the length ceiling — no
+  LLM call in this class at all).
+- `test_reporting.py` — `app/reporting/`: `ReportBuilder` assembles a
+  complete `CommunicationReport` without mutating any input, and the
+  result serializes cleanly.
+- `test_analyze_endpoint.py` — full end-to-end `POST /analyze`, through
+  `TestClient`, with `get_transcription_provider` and `get_llm_provider`
+  both substituted via `app.dependency_overrides` (no real network call,
+  no real LLM call): `TestAnalyzeFullPipeline` (a 201 with every field
+  present, all ten `AnalysisReport` modules `ok`, real metric values off
+  the fixture transcript, reasoning modules carrying the fake LLM's
+  labels, a bounded score, coaching content matching the fake LLM's
+  content, and — the one benchmark-style assertion in this file — the
+  fake `LLMProvider`'s `generate()` called exactly **twice** total per
+  request, proving the whole pipeline never regresses back toward one
+  call per reasoning dimension); `TestAnalyzeMetricOnlyDegradedPath`
+  (no `LLMProvider` configured returns 503
+  `no_provider_configured`, from the Coaching Engine — see
+  `docs/decisions/004-*.md` §3 for why this is a whole-request failure,
+  not a partial report); `TestAnalyzeErrorPropagation` (unsupported
+  format, a failing transcription provider, an unconfigured
+  transcription provider, and a near-empty transcript all propagate
+  through this one endpoint with the same HTTP status the standalone
+  `/api/upload`/`/api/upload/{id}/transcribe` routes already use).
 
 ## What isn't tested here
 

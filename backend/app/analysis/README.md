@@ -1,4 +1,4 @@
-# Communication Intelligence Engine (Sprint 4.2 foundation → Sprint 4.5.1 batched reasoning)
+# Communication Intelligence Engine (Sprint 4.2 foundation → Milestone 5 wired)
 
 This package is the "AI Analysis Layer" ADR 002 named and ADR 003
 designed. Sprint 4.2 built its foundation — the module contract, a
@@ -7,8 +7,11 @@ modules. Sprint 4.5 added the six semantic Reasoning modules, on top of
 `app/llm/`'s abstraction layer (Sprint 4.4). Sprint 4.5.1 replaced Sprint
 4.5's six independent LLM calls with one shared `ReasoningPass` — closing
 the batching gap Sprint 4.5 disclosed rather than silently deviated
-around. See `docs/decisions/003-*.md` for the full architecture and the
-ten evaluation dimensions.
+around. Milestone 5 (`docs/decisions/004-*.md`) finally wires this
+package into the running application — see "Wiring" below — and adds two
+independent downstream consumers of its output, `app/coaching/` and
+`app/scoring/`. See `docs/decisions/003-*.md` for this package's own
+full architecture and the ten evaluation dimensions.
 
 ## Folder structure
 
@@ -44,16 +47,23 @@ backend/app/analysis/
         └── rewrite/       # reserved — empty until a rewrite module exists
 ```
 
-Nothing here is wired into `app/main.py` yet — there's no API route that
-calls `AnalysisEngine`, and none of the ten modules above are registered
-into the shared `MODULE_REGISTRY` singleton, nor is `reasoning_pass_v1.md`
-registered into a `PromptRegistry`, nor does `MODULE_REGISTRY` have a
-`ReasoningPass` configured. That wiring is application startup's job, not
-a module's own — deliberately left for the sprint that actually builds
-the route. Tests construct fresh, isolated `ModuleRegistry()` (optionally
-with a `ReasoningPass` backed by a fake `LLMReasoner`) instances instead
-— see `tests/test_metric_modules.py`, `tests/test_reasoning_modules.py`,
-and `tests/test_reasoning_pass.py`.
+**Wiring (Milestone 5):** this package is now reachable from a real
+route. `POST /analyze` (`app/api/analyze.py`) calls `AnalysisEngine`
+through `app/core/dependencies.py`'s `get_analysis_engine()` /
+`get_module_registry()`, which constructs one `ModuleRegistry`, registers
+all ten modules above, and configures it with a `ReasoningPass` — real
+if `get_llm_provider()` returns a configured provider, `None` (per-module
+`NO_PROVIDER_CONFIGURED` degradation) otherwise. See
+`docs/decisions/004-*.md` for the full pipeline this package now sits
+inside. Every module is still constructed fresh per request, not a
+persistent singleton — see `get_module_registry()`'s own docstring for
+why (test/override-ability, via the same `Depends()`-chaining discipline
+`app/core/dependencies.py`'s module docstring has followed since Sprint
+3.4). Tests still construct fresh, isolated `ModuleRegistry()` instances
+directly rather than going through the DI layer — see
+`tests/test_metric_modules.py`, `tests/test_reasoning_modules.py`,
+`tests/test_reasoning_pass.py`, and, for the fully wired route,
+`tests/test_analyze_endpoint.py`.
 
 ## The module contract
 

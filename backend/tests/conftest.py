@@ -50,6 +50,8 @@ def _isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> It
     dependencies.get_blob_store.cache_clear()
     dependencies.get_record_store.cache_clear()
     dependencies.get_transcription_provider.cache_clear()
+    dependencies.get_llm_provider.cache_clear()
+    dependencies.get_prompt_registry.cache_clear()
 
     yield
 
@@ -58,6 +60,8 @@ def _isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> It
     dependencies.get_blob_store.cache_clear()
     dependencies.get_record_store.cache_clear()
     dependencies.get_transcription_provider.cache_clear()
+    dependencies.get_llm_provider.cache_clear()
+    dependencies.get_prompt_registry.cache_clear()
 
 
 @pytest.fixture
