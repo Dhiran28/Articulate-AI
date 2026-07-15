@@ -92,10 +92,24 @@ class ReasoningPass:
         hedge_word_count, hedge_word_examples = compute_hedge_signal(transcript_text)
         words_per_minute, average_sentence_length = extract_speaking_pace_hints(context.metrics)
 
-        return {
+        template_context: dict[str, Any] = {
             "transcript": transcript_text,
             "hedge_word_count": str(hedge_word_count),
             "hedge_word_examples": hedge_word_examples,
             "words_per_minute": words_per_minute,
             "average_sentence_length": average_sentence_length,
         }
+
+        # Milestone 5.1: an optional, purely diagnostic key —
+        # `LLMReasoner.reason()` reads it for its call log if present and
+        # never requires it (see reasoner.py's own docstring). Routed
+        # through `AnalysisContext.reasoning_context` (Sprint 4.5's
+        # already-existing extensibility hook) rather than widening
+        # `AnalysisContext` with a new field, since `AnalysisEngine.run()`
+        # already accepts a `reasoning_context` passthrough for exactly
+        # this kind of addition (see engine.py).
+        session_id = context.reasoning_context.get("session_id")
+        if session_id is not None:
+            template_context["session_id"] = session_id
+
+        return template_context

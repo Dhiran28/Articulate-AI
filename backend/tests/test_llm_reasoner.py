@@ -187,6 +187,88 @@ class TestDefaultLLMReasonerFailureModes:
             DefaultLLMReasoner(None, prompt_registry)
 
 
+class TestDefaultLLMReasonerLogging:
+    """
+    Milestone 5.1: one consolidated log line per call, covering session
+    id, provider, model, prompt id/version, latency, token usage, and
+    errors — see reason()'s own docstring in app/llm/reasoner.py for why
+    this lives here rather than in each caller (ReasoningPass,
+    CoachingEngine).
+    """
+
+    async def test_success_log_line_carries_every_required_field(
+        self, prompt_registry: PromptRegistry, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        provider = FakeProvider(responses=['{"label": "clear", "explanation": "fine"}'])
+        provider.last_usage = {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16}
+        reasoner = DefaultLLMReasoner(provider, prompt_registry)
+
+        with caplog.at_level("INFO", logger="app.llm.reasoner"):
+            await reasoner.reason(
+                "structure_v1", {"transcript": "x", "session_id": "abc-123"}, _ExampleSchema
+            )
+
+        [record] = [r for r in caplog.records if r.name == "app.llm.reasoner"]
+        message = record.getMessage()
+        assert "session_id=abc-123" in message
+        assert "provider=fake" in message
+        assert "model=fake-model" in message
+        assert "prompt_id=structure_v1" in message
+        assert "prompt_version=" in message
+        assert "latency_ms=" in message
+        assert "prompt_tokens=12" in message
+        assert "completion_tokens=4" in message
+        assert "total_tokens=16" in message
+        assert "status=ok" in message
+
+    async def test_missing_session_id_logs_unknown_rather_than_failing(
+        self, prompt_registry: PromptRegistry, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        provider = FakeProvider(responses=['{"label": "clear", "explanation": "fine"}'])
+        reasoner = DefaultLLMReasoner(provider, prompt_registry)
+
+        with caplog.at_level("INFO", logger="app.llm.reasoner"):
+            await reasoner.reason("structure_v1", {"transcript": "x"}, _ExampleSchema)
+
+        [record] = [r for r in caplog.records if r.name == "app.llm.reasoner"]
+        assert "session_id=unknown" in record.getMessage()
+
+    async def test_a_provider_with_no_last_usage_attribute_logs_na(
+        self, prompt_registry: PromptRegistry, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # FakeProvider (this file) never sets last_usage — the same shape
+        # a hand-written test double for LLMReasoner-adjacent tests
+        # elsewhere in this suite has. Logging must not assume every
+        # provider carries the (optional, non-Protocol) attribute.
+        provider = FakeProvider(responses=['{"label": "clear", "explanation": "fine"}'])
+        reasoner = DefaultLLMReasoner(provider, prompt_registry)
+
+        with caplog.at_level("INFO", logger="app.llm.reasoner"):
+            await reasoner.reason("structure_v1", {"transcript": "x"}, _ExampleSchema)
+
+        [record] = [r for r in caplog.records if r.name == "app.llm.reasoner"]
+        assert "prompt_tokens=n/a" in record.getMessage()
+
+    async def test_failure_is_logged_at_error_level_with_reason(
+        self, prompt_registry: PromptRegistry, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        provider = FakeProvider(error=RuntimeError("boom"))
+        reasoner = DefaultLLMReasoner(provider, prompt_registry, retry_policy=RetryPolicy(max_attempts=1))
+
+        with caplog.at_level("INFO", logger="app.llm.reasoner"):
+            with pytest.raises(LLMProviderError):
+                await reasoner.reason(
+                    "structure_v1", {"transcript": "x", "session_id": "abc-123"}, _ExampleSchema
+                )
+
+        [record] = [r for r in caplog.records if r.name == "app.llm.reasoner"]
+        assert record.levelname == "ERROR"
+        message = record.getMessage()
+        assert "session_id=abc-123" in message
+        assert "status=error" in message
+        assert "reason=llm_provider_error" in message
+
+
 async def _instant_sleep(_seconds: float) -> None:
     return None
 

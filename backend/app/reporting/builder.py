@@ -11,7 +11,7 @@ only job is packaging them into one `CommunicationReport`, the same
 from app.analysis.models import AnalysisReport
 from app.coaching.models import CoachingReport
 
-from .models import CommunicationReport
+from .models import CommunicationReport, PromptVersions
 from app.scoring.models import CommunicationScore
 
 
@@ -24,11 +24,17 @@ class ReportBuilder:
         score: CommunicationScore,
         coaching: CoachingReport,
         executive_summary: str,
+        prompt_versions: PromptVersions | None = None,
     ) -> CommunicationReport:
+        # Milestone 5.1: optional, defaults to "nothing known" (both
+        # fields None) rather than requiring every existing caller of
+        # this method (including every pre-5.1 test) to start supplying
+        # it — additive, not a breaking change to this builder's contract.
         return CommunicationReport(
             transcript_id=transcript_id,
             executive_summary=executive_summary,
             score=score,
             analysis=analysis,
             coaching=coaching,
+            prompt_versions=prompt_versions or PromptVersions(),
         )

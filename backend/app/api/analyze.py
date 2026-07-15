@@ -19,6 +19,7 @@ standalone — nothing about this route changes them.
 """
 
 import logging
+import time
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
@@ -34,14 +35,17 @@ from app.core.dependencies import (
     get_analysis_engine,
     get_audio_service,
     get_coaching_engine,
+    get_prompt_registry,
     get_report_builder,
     get_scoring_engine,
     get_summary_generator,
     get_transcript_processor,
     get_transcription_service,
 )
+from app.llm.errors import PromptNotFoundError
+from app.llm.prompt_registry import PromptRegistry
 from app.reporting.builder import ReportBuilder
-from app.reporting.models import CommunicationReport
+from app.reporting.models import CommunicationReport, PromptVersions
 from app.scoring.engine import ScoringEngine
 from app.scoring.errors import ScoringError, ScoringErrorReason
 from app.transcription.errors import TranscriptionError, TranscriptionErrorReason
@@ -102,6 +106,7 @@ async def analyze(
     coaching_engine: CoachingEngine = Depends(get_coaching_engine),
     summary_generator: CommunicationSummaryGenerator = Depends(get_summary_generator),
     report_builder: ReportBuilder = Depends(get_report_builder),
+    prompt_registry: PromptRegistry = Depends(get_prompt_registry),
 ) -> CommunicationReport:
     """
     Accepts one audio file and returns one complete `CommunicationReport`.
@@ -143,6 +148,7 @@ async def analyze(
     (steps 5/6) — this route only raises an HTTPException for
     conditions that mean no meaningful report can be built at all.
     """
+    request_start = time.monotonic()
     ingestor = HttpUploadIngestor(file)
     raw_upload = await ingestor.ingest()
 
@@ -154,9 +160,12 @@ async def analyze(
             detail={"error": exc.reason.value, "message": exc.message},
         ) from exc
 
+    logger.info("analyze_request_started session_id=%s", asset.id)
+
     try:
         raw_transcript = await transcription_service.transcribe_asset(asset.id)
     except TranscriptionError as exc:
+        logger.error("analyze_request_failed session_id=%s stage=transcription reason=%s", asset.id, exc.reason.value)
         raise HTTPException(
             status_code=_TRANSCRIPTION_REASON_TO_STATUS[exc.reason],
             detail={"error": exc.reason.value, "message": exc.message},
@@ -165,8 +174,15 @@ async def analyze(
     processed_transcript = processor.process(raw_transcript)
 
     try:
-        analysis_report = await analysis_engine.run(asset.id, processed_transcript)
+        # session_id flows through AnalysisContext.reasoning_context (the
+        # extensibility hook Sprint 4.5 built for exactly this kind of
+        # addition) so ReasoningPass can attach it to its one LLM call's
+        # log line — see app/analysis/reasoning_pass/batch.py.
+        analysis_report = await analysis_engine.run(
+            asset.id, processed_transcript, reasoning_context={"session_id": asset.id}
+        )
     except AnalysisError as exc:
+        logger.error("analyze_request_failed session_id=%s stage=analysis reason=%s", asset.id, exc.reason.value)
         raise HTTPException(
             status_code=_ANALYSIS_REASON_TO_STATUS[exc.reason],
             detail={"error": exc.reason.value, "message": exc.message},
@@ -175,6 +191,7 @@ async def analyze(
     try:
         score = scoring_engine.score(analysis_report)
     except ScoringError as exc:
+        logger.error("analyze_request_failed session_id=%s stage=scoring reason=%s", asset.id, exc.reason.value)
         raise HTTPException(
             status_code=_SCORING_REASON_TO_STATUS[exc.reason],
             detail={"error": exc.reason.value, "message": exc.message},
@@ -183,6 +200,7 @@ async def analyze(
     try:
         coaching_report = await coaching_engine.generate(analysis_report)
     except CoachingError as exc:
+        logger.error("analyze_request_failed session_id=%s stage=coaching reason=%s", asset.id, exc.reason.value)
         raise HTTPException(
             status_code=_COACHING_REASON_TO_STATUS[exc.reason],
             detail={"error": exc.reason.value, "message": exc.message},
@@ -190,10 +208,43 @@ async def analyze(
 
     executive_summary = summary_generator.generate(coaching_report)
 
-    return report_builder.build(
+    report = report_builder.build(
         transcript_id=asset.id,
         analysis=analysis_report,
         score=score,
         coaching=coaching_report,
         executive_summary=executive_summary,
+        prompt_versions=_resolve_prompt_versions(prompt_registry),
+    )
+
+    logger.info(
+        "analyze_request_completed session_id=%s total_latency_ms=%.1f",
+        asset.id,
+        (time.monotonic() - request_start) * 1000,
+    )
+    return report
+
+
+def _resolve_prompt_versions(prompt_registry: PromptRegistry) -> PromptVersions:
+    """
+    Reads each real prompt's declared version straight off the registry
+    (`PromptTemplate.metadata.version` — app/llm/prompt_loader.py), for
+    whichever prompt id `ReasoningPass`/`CoachingEngine` are configured
+    to use by default. `PromptNotFoundError` shouldn't happen in a
+    correctly deployed server (`get_prompt_registry()` always registers
+    both files — see app/core/dependencies.py), but this stays defensive
+    rather than letting a missing prompt file take down report assembly
+    for an otherwise-successful analysis.
+    """
+
+    def _version(prompt_id: str) -> str | None:
+        try:
+            template = prompt_registry.get(prompt_id)
+        except PromptNotFoundError:
+            return None
+        return template.metadata.version if template.metadata else None
+
+    return PromptVersions(
+        reasoning_pass=_version("reasoning_pass_v1"),
+        coaching=_version("coaching_v1"),
     )

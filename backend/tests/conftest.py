@@ -45,6 +45,15 @@ def _isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> It
     """
     monkeypatch.setenv("UPLOAD_TEMP_DIR", str(tmp_path / "audio"))
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    # Milestone 5.1: the same leak-prevention as OPENAI_API_KEY above,
+    # extended to every credential/selection a real .env might set for
+    # the LLM layer. LLM_PROVIDER is cleared too — a developer's local
+    # .env might have it set to a real vendor for manual testing, which
+    # would otherwise make get_llm_provider() try to build a real,
+    # credentialed provider inside a test run.
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
 
     get_settings.cache_clear()
     dependencies.get_blob_store.cache_clear()
@@ -52,6 +61,8 @@ def _isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> It
     dependencies.get_transcription_provider.cache_clear()
     dependencies.get_llm_provider.cache_clear()
     dependencies.get_prompt_registry.cache_clear()
+    dependencies.get_retry_policy.cache_clear()
+    dependencies.get_timeout_policy.cache_clear()
 
     yield
 
@@ -62,6 +73,8 @@ def _isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> It
     dependencies.get_transcription_provider.cache_clear()
     dependencies.get_llm_provider.cache_clear()
     dependencies.get_prompt_registry.cache_clear()
+    dependencies.get_retry_policy.cache_clear()
+    dependencies.get_timeout_policy.cache_clear()
 
 
 @pytest.fixture

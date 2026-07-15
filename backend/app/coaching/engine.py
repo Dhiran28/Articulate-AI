@@ -56,7 +56,14 @@ class CoachingEngine:
                 "No LLM reasoner is configured on the server.",
             )
 
-        template_context = {"analysis_report_json": self._serialize(ok_modules)}
+        template_context = {
+            "analysis_report_json": self._serialize(ok_modules),
+            # Milestone 5.1: same optional, log-only convention
+            # `ReasoningPass` uses (see batch.py) — `report.transcript_id`
+            # is already this engine's one identifier for "which session,"
+            # so no new plumbing is needed to supply it.
+            "session_id": report.transcript_id,
+        }
 
         try:
             content = await self._reasoner.reason(self.prompt_id, template_context, CoachingContent)

@@ -58,7 +58,10 @@ from app.coaching.summary import CommunicationSummaryGenerator
 from app.core.config import get_settings
 from app.llm.prompt_registry import PromptRegistry
 from app.llm.provider import LLMProvider
+from app.llm.providers.factory import build_provider
 from app.llm.reasoner import DefaultLLMReasoner, LLMReasoner
+from app.llm.retry_policy import RetryPolicy
+from app.llm.timeout_policy import TimeoutPolicy
 from app.reporting.builder import ReportBuilder
 from app.scoring.engine import ScoringEngine
 from app.storage.blob_store import AudioBlobStore, LocalTempBlobStore
@@ -132,34 +135,48 @@ def get_transcript_processor() -> TranscriptProcessor:
 # Milestone 5 — Communication Intelligence Engine, LLM reasoning, coaching,
 # scoring, and reporting.
 #
-# Disclosed gap: get_llm_provider() below returns None. No concrete
-# LLMProvider exists anywhere in this codebase — app/llm/ (Sprint 4.4) was
-# explicitly scoped to contain no vendor SDK, and no later sprint has added
-# one. This is not an oversight specific to this milestone; it is the same,
-# already-named gap every LLM-related sprint since 4.4 has disclosed rather
-# than silently worked around. The effect on this milestone's /analyze
-# endpoint: the four deterministic Metric modules, the Overall Communication
-# Score's fluency-tier contribution, and the report's structural skeleton
-# all work with zero LLM dependency; every REASONING module and the
-# Coaching Engine degrade to a documented, specific error
-# (NO_PROVIDER_CONFIGURED) rather than crashing or silently producing
-# nothing — see ModuleRegistry.execute() and CoachingEngine.generate().
-# Wiring in a real provider is exactly one function to change, below, per
-# app/llm/README.md's "Future provider integration" section — nothing else
-# in this dependency chain needs to change when that happens.
+# Milestone 5.1 closes the gap this section used to document here: four real
+# LLMProvider adapters now exist (app/llm/providers/{openai,anthropic,
+# gemini,ollama}_provider.py) and get_llm_provider() below selects one
+# automatically from Settings.llm_provider — no vendor SDK call, no model
+# name, and no credential is hardcoded anywhere in this file or in any
+# adapter (see app/core/config.py and app/llm/providers/factory.py).
+#
+# The degraded, no-LLM path this milestone built is still real and still
+# exercised: leaving LLM_PROVIDER unset (the default) or configuring a
+# provider without its credential both make get_llm_provider() return None,
+# exactly as it always has — every REASONING module and the Coaching Engine
+# still degrade to a documented, specific error (NO_PROVIDER_CONFIGURED)
+# rather than crashing, and the four deterministic Metric modules keep
+# working with zero LLM dependency either way.
 # ---------------------------------------------------------------------------
 
 
 @lru_cache
 def get_llm_provider() -> LLMProvider | None:
     """
-    The one seam a future sprint fills in to make reasoning/coaching
-    live: construct and return a real `LLMProvider` implementation here
-    (see app/llm/README.md's "Future provider integration"). Returns
-    `None` today — see this section's header comment for why that's a
-    disclosed gap, not a bug.
+    Builds whichever `LLMProvider` `Settings.llm_provider` selects (see
+    `app/llm/providers/factory.py`), or `None` if no provider is
+    configured / the selected provider's credential is missing — both
+    are supported, normal states, not errors. An unrecognized
+    `LLM_PROVIDER` value raises `UnknownProviderError` immediately
+    (a real config mistake, not a "nothing configured" state) — this
+    only happens once, at first use, since the result is cached.
     """
-    return None
+    settings = get_settings()
+    return build_provider(settings)
+
+
+@lru_cache
+def get_retry_policy() -> RetryPolicy:
+    settings = get_settings()
+    return RetryPolicy(max_attempts=settings.llm_max_retries)
+
+
+@lru_cache
+def get_timeout_policy() -> TimeoutPolicy:
+    settings = get_settings()
+    return TimeoutPolicy(timeout_seconds=settings.llm_timeout_seconds)
 
 
 @lru_cache
@@ -184,6 +201,8 @@ def get_prompt_registry() -> PromptRegistry:
 def get_llm_reasoner(
     provider: LLMProvider | None = Depends(get_llm_provider),
     prompt_registry: PromptRegistry = Depends(get_prompt_registry),
+    retry_policy: RetryPolicy = Depends(get_retry_policy),
+    timeout_policy: TimeoutPolicy = Depends(get_timeout_policy),
 ) -> LLMReasoner | None:
     """
     `LLMReasoner | None`, not a required `LLMReasoner` — `DefaultLLMReasoner`'s
@@ -196,10 +215,17 @@ def get_llm_reasoner(
     `CoachingEngine`) decide how to degrade — per-module for analysis,
     a single named error for coaching — is what keeps the metric-only
     path of /analyze fully functional with no LLM configured.
+
+    `retry_policy`/`timeout_policy` (Milestone 5.1) are built from
+    `Settings.llm_max_retries`/`llm_timeout_seconds` rather than
+    `DefaultLLMReasoner`'s own hardcoded defaults — the same
+    `MAX_RETRIES`/`TIMEOUT` configuration surface this milestone asked
+    for applies uniformly no matter which of the four providers is
+    selected, since both policies live above the provider layer.
     """
     if provider is None:
         return None
-    return DefaultLLMReasoner(provider, prompt_registry)
+    return DefaultLLMReasoner(provider, prompt_registry, retry_policy=retry_policy, timeout_policy=timeout_policy)
 
 
 def get_reasoning_pass(

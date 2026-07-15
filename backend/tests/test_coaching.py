@@ -124,13 +124,19 @@ class TestCoachingEngineHappyPath:
     async def test_never_receives_the_raw_transcript(self) -> None:
         # ADR 003 §5's structural guarantee: the coaching prompt is built
         # entirely from the AnalysisReport, never transcript text.
+        # `session_id` (Milestone 5.1) is an intentional exception to
+        # "only analysis_report_json" — it's a diagnostic, log-only key
+        # (see app/llm/reasoner.py), not transcript content, and its
+        # value here is just `report.transcript_id`.
         reasoner = FakeLLMReasoner()
         engine = CoachingEngine(reasoner)
+        report = _report_with(filler_words=_ok_metric("filler_words"))
 
-        await engine.generate(_report_with(filler_words=_ok_metric("filler_words")))
+        await engine.generate(report)
 
         _, template_context = reasoner.calls[0]
-        assert set(template_context.keys()) == {"analysis_report_json"}
+        assert set(template_context.keys()) == {"analysis_report_json", "session_id"}
+        assert template_context["session_id"] == report.transcript_id
 
     async def test_only_ok_modules_reach_the_prompt(self) -> None:
         reasoner = FakeLLMReasoner()

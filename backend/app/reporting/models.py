@@ -17,6 +17,30 @@ from app.coaching.models import CoachingReport
 from app.scoring.models import CommunicationScore
 
 
+class PromptVersions(BaseModel):
+    """
+    Which version of each real prompt this application ships with
+    produced this report (Milestone 5.1) — read directly off
+    `PromptTemplate.metadata.version` (app/llm/prompt_loader.py) for
+    whichever prompt id `ReasoningPass`/`CoachingEngine` are configured
+    to use, not off anything the LLM call itself returned. Reproducing a
+    result later ("this report came from reasoning_pass_v1 @ 1.1.0")
+    only requires this field plus the report's own content — never the
+    raw provider response, which this codebase has never persisted.
+
+    `None` for a field means that stage's LLM call never actually ran
+    for this report (no provider configured, or that stage's own
+    documented failure mode) — not that versioning is broken. A prompt
+    that's registered but never called still has a version; a report
+    only cites the version of a prompt actually used to produce it, so
+    an unreachable stage's version is honestly absent rather than
+    misleadingly filled in from the registry anyway.
+    """
+
+    reasoning_pass: str | None = None
+    coaching: str | None = None
+
+
 class CommunicationReport(BaseModel):
     """
     The single response shape for `POST /analyze`.
@@ -32,6 +56,8 @@ class CommunicationReport(BaseModel):
       (`CommunicationSummaryGenerator`'s output), surfaced at the top
       level since it's the one field most likely to be read on its own
       without unpacking the rest of the report.
+    - `prompt_versions` (Milestone 5.1): provenance for the two LLM calls
+      this report can reflect — see `PromptVersions` above.
     """
 
     transcript_id: str
@@ -41,3 +67,4 @@ class CommunicationReport(BaseModel):
     score: CommunicationScore
     analysis: AnalysisReport
     coaching: CoachingReport
+    prompt_versions: PromptVersions = Field(default_factory=PromptVersions)

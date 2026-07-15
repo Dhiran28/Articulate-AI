@@ -1,33 +1,46 @@
-# LLM Abstraction Layer (Sprint 4.4, prompt metadata extended Sprint 4.5)
+# LLM Abstraction Layer (Sprint 4.4, prompt metadata extended Sprint 4.5, provider adapters added Milestone 5.1)
 
 This is `app/llm/` — the seam ADR 003 named ("app/llm/ ... depended on
 by both engines below; depends on neither") and Sprint 4.4 fully builds
-out. **It still contains no vendor SDK and no API key handling.**
-Sprint 4.5 was this package's first real consumer, with each of six
+out. Sprint 4.5 was this package's first real consumer, with each of six
 reasoning modules calling `LLMReasoner.reason()` independently. Sprint
 4.5.1 changed *who* calls it, not the interface itself: now exactly one
 component, `ReasoningPass` (`app/analysis/reasoning_pass/batch.py`),
 calls `LLMReasoner.reason()` once per analysis on behalf of all six
 reasoning modules, which no longer call this package at all — see
 `app/analysis/README.md`'s "Batching (Sprint 4.5.1)" section for the
-full design. `ReasoningPass` is tested against a fake `LLMReasoner`
-(`tests/test_reasoning_pass.py`), same as this package's own tests use
-for `LLMProvider` — still no vendor SDK or real provider wired in
-anywhere.
+full design.
+
+**Milestone 5.1 fills in the one gap this file used to describe as
+still-open:** four real `LLMProvider` adapters now exist, in the new
+`app/llm/providers/` subpackage, exactly where "Future provider
+integration" below always said they'd go — nothing in `provider.py`,
+`reasoner.py`, or any other file listed in "Folder structure" changed to
+make that possible. `ReasoningPass` and `CoachingEngine` are still
+tested against a fake `LLMReasoner` (`tests/test_reasoning_pass.py`,
+`tests/test_coaching.py`); the four adapters get their own tests
+(`tests/test_llm_providers.py`), each with the vendor SDK's one
+network-calling method monkeypatched out — see that file's own docstring.
 
 ## Folder structure
 
 ```
 backend/app/llm/
 ├── provider.py          # LLMProvider — the Protocol every vendor adapter implements
-├── reasoner.py           # LLMReasoner Protocol + DefaultLLMReasoner (the pipeline)
+├── reasoner.py           # LLMReasoner Protocol + DefaultLLMReasoner (the pipeline; owns call logging)
 ├── prompt_loader.py       # PromptTemplate, PromptLoader — reads one prompt file
 ├── prompt_registry.py     # PromptRegistry — the collection, keyed by identifier
 ├── response_parser.py     # parse_json_response() — raw text -> dict
 ├── schema_validator.py    # validate_schema() — dict -> validated pydantic model
 ├── retry_policy.py        # RetryPolicy — bounded retry with backoff
 ├── timeout_policy.py      # TimeoutPolicy — hard time limit per attempt
-└── errors.py              # LLMError hierarchy
+├── errors.py              # LLMError hierarchy
+└── providers/             # Milestone 5.1 — the four concrete LLMProvider adapters
+    ├── openai_provider.py     # OpenAI Chat Completions
+    ├── anthropic_provider.py  # Anthropic Messages API
+    ├── gemini_provider.py     # Google Gemini (google-genai SDK)
+    ├── ollama_provider.py     # Local/self-hosted Ollama, plain HTTP (no SDK dependency)
+    └── factory.py             # build_provider(settings) — selects one from Settings.llm_provider
 ```
 
 Real prompt files do **not** live in this package. Per ADR 003 §3, those
@@ -148,28 +161,40 @@ Every subclass fixes its own `reason` as a class attribute — a caller
 can catch the specific subclass (`except LLMSchemaError:`) or the base
 `LLMError` and branch on `.reason`, whichever fits.
 
-## Future provider integration
+## Provider adapters and selection (Milestone 5.1)
 
-Adding OpenAI, Anthropic, Google Gemini, Ollama, or a self-hosted local
-model is, by design, a change that touches **one new file and nothing
-in this package**:
+Each of the four adapters in `providers/` is exactly what "Future
+provider integration" below used to ask for: a class implementing
+`LLMProvider` — `provider_name`, `model_name`, `version`, and
+`async def generate(prompt: str) -> str` — that calls one vendor's
+SDK/API and returns the raw text response. Nothing in `provider.py`,
+`reasoner.py`, `prompt_loader.py`, `prompt_registry.py`,
+`response_parser.py`, `schema_validator.py`, `retry_policy.py`,
+`timeout_policy.py`, or `errors.py` changed to add any of them.
+`DefaultLLMReasoner` still only ever calls `provider.generate(prompt)` —
+it has no idea, and no way to tell, whether that's OpenAI, a local
+Ollama model, or a test double.
 
-1. Write a class implementing `LLMProvider` — `provider_name`,
-   `model_name`, `version`, and `async def generate(prompt: str) ->
-   str` that calls that vendor's SDK/API and returns the raw text
-   response. It lives outside `app/llm/`, the same way
-   `OpenAIWhisperProvider` lives in `app/transcription/providers/`, not
-   inside the generic `app/transcription/` seam it implements.
-2. Wire it up wherever provider selection happens (a future
-   `app/core/dependencies.py` addition, config-driven — not built this
-   sprint, since that's where an API key would first need to exist, and
-   this sprint explicitly has none).
-3. Nothing in `provider.py`, `reasoner.py`, `prompt_loader.py`,
-   `prompt_registry.py`, `response_parser.py`, `schema_validator.py`,
-   `retry_policy.py`, `timeout_policy.py`, or `errors.py` changes.
-   `DefaultLLMReasoner` only ever calls `provider.generate(prompt)` —
-   it has no idea, and no way to tell, whether that's OpenAI, a local
-   Ollama model, or a test double.
+`providers/factory.py`'s `build_provider(settings)` is where selection
+happens: it reads `Settings.llm_provider` (`app/core/config.py` —
+`LLM_PROVIDER` in the environment) and constructs the matching adapter,
+or returns `None` if nothing is configured or the selected vendor's
+credential is missing. `app/core/dependencies.py`'s `get_llm_provider()`
+calls it once per process (cached) — see that file's own "Milestone 5"
+section header for the full degraded-path story. An unrecognized
+`LLM_PROVIDER` value raises `UnknownProviderError` immediately, rather
+than silently behaving like nothing was configured — a real
+configuration mistake, not a legitimate empty state.
+
+Each adapter also exposes a non-Protocol, diagnostic-only
+`last_usage: dict | None` attribute (`{"prompt_tokens", "completion_tokens",
+"total_tokens"}`, normalized from that vendor's own response shape) —
+`DefaultLLMReasoner.reason()` reads it immediately after each call for
+its one consolidated log line (see `reasoner.py`'s own docstring for
+the full field list: session id, provider, model, prompt id/version,
+latency, token usage, and errors — everything Milestone 5.1's logging
+requirement asked for, logged once per call, in the one place every
+current LLM caller already goes through).
 
 The same applies to a provider adapter that raises its own SDK-specific
 exceptions on failure: `DefaultLLMReasoner._call_provider` catches
@@ -177,13 +202,13 @@ anything that isn't already an `LLMError` and reclassifies it as
 `LLMProviderError` — a provider implementation is never expected to know
 about this package's own error hierarchy.
 
-## What this layer still does not include, as of Sprint 4.5.1
+## What this layer still does not include, as of Milestone 5.1
 
-Still no concrete provider (OpenAI/Anthropic/Gemini/Ollama/local), no API
-keys, and no provider-selection wiring in `app/core/dependencies.py` —
-`ReasoningPass` is tested exclusively against a fake `LLMReasoner`,
-never a real one. The batching mechanism ADR 003 §1 required (one
-combined LLM call across the six reasoning dimensions, instead of six
-independent calls) is no longer missing — Sprint 4.5.1 built it, see
-`app/analysis/README.md`'s "Batching (Sprint 4.5.1)" section. Wiring in
-a real provider remains explicitly left for a future sprint.
+No persistence of raw provider responses or logs beyond process stdout,
+no per-request/per-user rate limiting above whatever each vendor's own
+API enforces, and no streaming (`generate()` returns one complete
+string, never a partial/streamed response) — the same "one call, one
+validated result" shape this package has held since Sprint 4.4. Adding
+a fifth vendor still only requires one new file in `providers/` plus one
+new branch in `factory.py`'s `build_provider()` — nothing else in this
+package.
