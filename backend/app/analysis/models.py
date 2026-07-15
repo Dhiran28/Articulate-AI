@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.transcript_processing.models import TranscriptProcessingResult
+
 from .errors import AnalysisErrorReason
 
 
@@ -120,6 +122,40 @@ class ModuleResult(BaseModel):
                 raise ValueError("An `ok` REASONING ModuleResult must carry `reasoning` and nothing else.")
 
         return self
+
+
+class AnalysisContext(BaseModel):
+    """
+    Sprint 4.5: what every module actually receives, widened from Sprint
+    4.2's bare `TranscriptProcessingResult`. Three things, matching the
+    sprint's explicit requirement:
+
+      - `transcript`: unchanged from Sprint 4.2/4.3 — the verbatim,
+        processed transcript.
+      - `metrics`: every already-completed Metric module's ModuleResult,
+        keyed by module_name. Populated by ModuleRegistry.execute()
+        running every METRIC module first, then handing this dict to
+        every non-metric module (see registry.py) — a reasoning module
+        never calls a metric module itself; it's simply handed the
+        finished results. Always `{}` for a Metric module (nothing has
+        run before it).
+      - `reasoning_context`: an open, currently-unused-by-default
+        extensibility hook for whatever else a future caller might want
+        to hand every module (e.g. speaker role, prior-session history)
+        — the same "define the shape now, build the substance later"
+        treatment Sprint 1 gave `app/models/` and Sprint 3's ADR 002
+        gave the AI Analysis Layer itself.
+
+    This is a genuine, disclosed breaking change to the Sprint 4.2
+    `AnalysisModule` interface (`analyze(transcript)` becomes
+    `analyze(context)`) — see docs/decisions/003-*.md's Sprint 4.5
+    revision note for why, and app/analysis/README.md for the migration
+    every Sprint 4.3 Metric module went through.
+    """
+
+    transcript: TranscriptProcessingResult
+    metrics: dict[str, ModuleResult] = Field(default_factory=dict)
+    reasoning_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnalysisReport(BaseModel):

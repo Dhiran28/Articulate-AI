@@ -38,7 +38,7 @@ from typing import Any
 
 from app.transcript_processing.models import TranscriptProcessingResult
 
-from ..models import MetricResult, ModuleResult, ModuleStatus, ModuleType, ResultMetadata
+from ..models import AnalysisContext, MetricResult, ModuleResult, ModuleStatus, ModuleType, ResultMetadata
 
 _WORD_PATTERN = re.compile(r"[A-Za-z']+")
 """Mirrors app/transcript_processing/processor.py's own tokenization —
@@ -67,7 +67,8 @@ class RepetitionModule:
             "phrase_lengths": list(phrase_lengths),
         }
 
-    async def analyze(self, transcript: TranscriptProcessingResult) -> ModuleResult:
+    async def analyze(self, context: AnalysisContext) -> ModuleResult:
+        transcript = context.transcript
         immediate_repetitions = self._immediate_repetitions(transcript)
         repeated_words = self._tally(immediate_repetitions)
         repeated_phrases = self._repeated_phrases(transcript)

@@ -1,10 +1,11 @@
 import logging
+from typing import Any
 
 from app.transcript_processing.models import TranscriptProcessingResult
 
 from .errors import AnalysisErrorReason
 from .modules.base import AnalysisModule
-from .models import ModuleErrorDetail, ModuleResult, ModuleStatus, ResultMetadata
+from .models import AnalysisContext, ModuleErrorDetail, ModuleResult, ModuleStatus, ModuleType, ResultMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -76,10 +77,38 @@ class ModuleRegistry:
     def __contains__(self, module_name: str) -> bool:
         return module_name in self._modules
 
-    async def execute(self, transcript: TranscriptProcessingResult) -> list[ModuleResult]:
+    async def execute(
+        self,
+        transcript: TranscriptProcessingResult,
+        reasoning_context: dict[str, Any] | None = None,
+    ) -> list[ModuleResult]:
         """
-        Runs every registered module against `transcript`, in
-        registration order, and returns one ModuleResult per module.
+        Runs every registered module against `transcript` and returns one
+        ModuleResult per module.
+
+        Sprint 4.5 change (disclosed breaking change to Sprint 4.2's flat
+        registration-order execution): this is now a two-phase run, not a
+        single pass.
+
+          Phase 1 — every METRIC module runs first, in registration order,
+          each given an AnalysisContext whose `metrics` dict is empty
+          (nothing has run yet). Every METRIC result, keyed by
+          module_name, is collected into a `metrics` dict as it completes.
+
+          Phase 2 — every non-METRIC module (i.e. REASONING) runs next, in
+          registration order, each given an AnalysisContext whose
+          `metrics` dict is now fully populated with every METRIC result
+          from phase 1. This is what lets a Reasoning module (e.g. Sprint
+          4.5's ConcisenessModule) use deterministic signal like
+          speaking_pace's words-per-minute without calling that module
+          itself — it's simply handed the finished result.
+
+        The overall returned order is therefore "all METRIC results, then
+        all REASONING results" — no longer strict flat registration order
+        across types, though registration order is still preserved within
+        each phase. `reasoning_context` is passed straight through to
+        every module's AnalysisContext unchanged; it's an open
+        extensibility hook this registry doesn't interpret itself.
 
         A module that raises never stops the others from running and
         never propagates out of this method (ADR 003 §7) — it's caught
@@ -87,14 +116,31 @@ class ModuleRegistry:
         MODULE_ERROR, the same isolation AnalysisEngine relied on before
         this responsibility moved into the registry itself.
         """
+        modules = self.discover()
+        metric_modules = [m for m in modules if m.module_type is ModuleType.METRIC]
+        other_modules = [m for m in modules if m.module_type is not ModuleType.METRIC]
+        context_extras = reasoning_context or {}
+
         results: list[ModuleResult] = []
-        for module in self.discover():
-            results.append(await self._run_one(module, transcript))
+        metrics: dict[str, ModuleResult] = {}
+
+        metric_phase_context = AnalysisContext(transcript=transcript, metrics={}, reasoning_context=context_extras)
+        for module in metric_modules:
+            result = await self._run_one(module, metric_phase_context)
+            results.append(result)
+            metrics[module.module_name] = result
+
+        reasoning_phase_context = AnalysisContext(
+            transcript=transcript, metrics=metrics, reasoning_context=context_extras
+        )
+        for module in other_modules:
+            results.append(await self._run_one(module, reasoning_phase_context))
+
         return results
 
-    async def _run_one(self, module: AnalysisModule, transcript: TranscriptProcessingResult) -> ModuleResult:
+    async def _run_one(self, module: AnalysisModule, context: AnalysisContext) -> ModuleResult:
         try:
-            return await module.analyze(transcript)
+            return await module.analyze(context)
         except Exception:
             logger.exception("Analysis module %s raised during analyze()", module.module_name)
             return ModuleResult(

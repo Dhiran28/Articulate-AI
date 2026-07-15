@@ -17,9 +17,7 @@ import re
 from collections import Counter
 from typing import Any
 
-from app.transcript_processing.models import TranscriptProcessingResult
-
-from ..models import MetricResult, ModuleResult, ModuleStatus, ModuleType, ResultMetadata
+from ..models import AnalysisContext, MetricResult, ModuleResult, ModuleStatus, ModuleType, ResultMetadata
 
 # Mirrors app/transcript_processing/processor.py's own tokenization
 # ("[A-Za-z']+", lowercased) so filler counts computed here are directly
@@ -61,7 +59,13 @@ class FillerWordModule:
             "dictionary_size": len(self._filler_words),
         }
 
-    async def analyze(self, transcript: TranscriptProcessingResult) -> ModuleResult:
+    async def analyze(self, context: AnalysisContext) -> ModuleResult:
+        # Sprint 4.5: analyze() now receives the wider AnalysisContext,
+        # not a bare transcript. This module is a Metric module, so
+        # context.metrics is always {} (nothing has run before it — see
+        # ModuleRegistry's two-phase order) and reasoning_context is
+        # unused here; only the transcript itself is relevant.
+        transcript = context.transcript
         occurrences: list[dict[str, Any]] = []
 
         for index, segment in enumerate(transcript.processed_transcript.segments):

@@ -21,9 +21,7 @@ never invokes an LLM.
 
 from typing import Any
 
-from app.transcript_processing.models import TranscriptProcessingResult
-
-from ..models import MetricResult, ModuleResult, ModuleStatus, ModuleType, ResultMetadata
+from ..models import AnalysisContext, MetricResult, ModuleResult, ModuleStatus, ModuleType, ResultMetadata
 
 
 class HesitationModule:
@@ -47,7 +45,8 @@ class HesitationModule:
             "long_pause_threshold_seconds": long_pause_threshold_seconds,
         }
 
-    async def analyze(self, transcript: TranscriptProcessingResult) -> ModuleResult:
+    async def analyze(self, context: AnalysisContext) -> ModuleResult:
+        transcript = context.transcript
         segments = transcript.processed_transcript.segments
         duration = transcript.metadata.duration_seconds
 

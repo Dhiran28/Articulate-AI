@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from app.llm.errors import PromptNotFoundError
-from app.llm.prompt_loader import PromptLoader, PromptTemplate
+from app.llm.prompt_loader import PromptFormatError, PromptLoader, PromptMetadata, PromptTemplate
 from app.llm.prompt_registry import DuplicatePromptError, PromptRegistry
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "prompts"
@@ -30,6 +30,49 @@ class TestPromptLoader:
         loader = PromptLoader()
         with pytest.raises(FileNotFoundError):
             loader.load("does_not_exist", tmp_path / "nope.md")
+
+
+class TestPromptMetadata:
+    """Sprint 4.5: every real prompt file must declare structured metadata."""
+
+    def test_a_loaded_prompt_exposes_its_metadata(self) -> None:
+        template = PromptLoader().load("structure_v1", FIXTURES_DIR / "structure_v1.md")
+
+        assert isinstance(template.metadata, PromptMetadata)
+        assert template.metadata.id == "structure_v1"
+        assert template.metadata.version == "1.0.0"
+        assert template.metadata.type == "analysis"
+        assert template.metadata.expected_output == "ReasoningResult"
+        assert template.metadata.model_hints == {"temperature": 0.2}
+
+    def test_raw_text_excludes_the_frontmatter_block(self) -> None:
+        template = PromptLoader().load("structure_v1", FIXTURES_DIR / "structure_v1.md")
+
+        assert not template.raw_text.startswith("---")
+        assert '"id": "structure_v1"' not in template.raw_text
+        assert "$transcript" in template.raw_text
+
+    def test_missing_frontmatter_raises_prompt_format_error(self, tmp_path: Path) -> None:
+        path = tmp_path / "no_metadata.md"
+        path.write_text("Just a prompt body with $transcript, no frontmatter at all.")
+
+        with pytest.raises(PromptFormatError):
+            PromptLoader().load("no_metadata", path)
+
+    def test_malformed_json_frontmatter_raises_prompt_format_error(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad_json.md"
+        path.write_text("---\n{not valid json\n---\nBody: $transcript")
+
+        with pytest.raises(PromptFormatError):
+            PromptLoader().load("bad_json", path)
+
+    def test_incomplete_frontmatter_raises_prompt_format_error(self, tmp_path: Path) -> None:
+        # Valid JSON, but missing required fields (version, expected_output, ...).
+        path = tmp_path / "incomplete.md"
+        path.write_text('---\n{"id": "x", "type": "analysis"}\n---\nBody: $transcript')
+
+        with pytest.raises(PromptFormatError):
+            PromptLoader().load("incomplete", path)
 
 
 class TestPromptTemplateRender:
@@ -97,8 +140,12 @@ class TestPromptRegistry:
         assert registry.get("clarity_v1").identifier == "clarity_v1"
 
     def test_discover_respects_a_custom_pattern(self, tmp_path: Path) -> None:
-        (tmp_path / "a.txt").write_text("hello $x")
-        (tmp_path / "b.md").write_text("hello $x")
+        frontmatter = (
+            '---\n{"id": "a", "version": "1.0.0", "type": "analysis", '
+            '"expected_output": "ReasoningResult", "model_hints": {}}\n---\n'
+        )
+        (tmp_path / "a.txt").write_text(frontmatter + "hello $x")
+        (tmp_path / "b.md").write_text(frontmatter + "hello $x")
 
         registry = PromptRegistry()
         identifiers = registry.discover_directory(tmp_path, pattern="*.txt")

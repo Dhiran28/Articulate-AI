@@ -1,17 +1,13 @@
 from typing import Any, Protocol, runtime_checkable
 
-from app.transcript_processing.models import TranscriptProcessingResult
-
-from ..models import ModuleResult, ModuleType
+from ..models import AnalysisContext, ModuleResult, ModuleType
 
 
 @runtime_checkable
 class AnalysisModule(Protocol):
     """
-    Sprint 4.2's one required module contract (ADR 003 §1's module
-    concept, deliberately unified for this scaffolding sprint rather
-    than split by how a future module gets its judgment). Every module —
-    whether it ends up METRIC or REASONING — implements the same shape:
+    The one required module contract every analysis module implements —
+    Metric (Sprint 4.3) and Reasoning (Sprint 4.5) alike:
 
       - `module_name`: a unique identifier (see ModuleRegistry —
         duplicate names are rejected at registration).
@@ -22,32 +18,40 @@ class AnalysisModule(Protocol):
         itself (e.g. a version or short description) — distinct from
         ResultMetadata (models.py), which is provenance attached to a
         *result*, not the module's own self-description.
-      - `analyze()`: given a transcript, return this module's
+      - `analyze()`: given an AnalysisContext, return this module's
         ModuleResult.
 
     `@runtime_checkable` lets ModuleRegistry and AnalysisEngine verify a
     registered object actually satisfies this shape with a plain
     isinstance() check.
 
-    No implementations exist yet — Sprint 4.2 explicitly builds
-    scaffolding only, not real modules (ADR 003 §2 lists the ten
-    dimensions this will eventually house).
+    Sprint 4.5 change (a genuine, disclosed breaking change from Sprint
+    4.2): `analyze()` used to take a bare TranscriptProcessingResult.
+    It now takes an AnalysisContext, which carries the transcript plus
+    two more things Sprint 4.5 requires every module receive: `metrics`
+    (every already-completed Metric module's ModuleResult, so a
+    Reasoning module can use deterministic signal as context without
+    calling another module itself — see ModuleRegistry.execute's
+    two-phase order) and `reasoning_context` (an open extensibility
+    hook, unused by default). See docs/decisions/003-*.md's Sprint 4.5
+    revision note for the full reasoning behind this change, and
+    app/analysis/README.md for what every Sprint 4.3 module had to
+    change to keep working.
 
     A note on where ADR 003's "reasoning modules should not
     independently call the LLM by default" requirement goes from here:
-    it isn't a second Protocol shape in this sprint. A future REASONING
-    module still implements `analyze()` like any other module; the
-    "share one LLM call across modules" behavior becomes an
-    implementation detail of *how* several reasoning modules' analyze()
-    calls coordinate through a shared component (introduced in the
-    sprint that actually builds LLM integration), not a different
-    interface at the registry/engine level. Keeping one uniform contract
-    now is what lets the registry and engine be batching-mechanism
-    agnostic entirely.
+    Sprint 4.5's six reasoning modules each still call the shared
+    LLMReasoner once per module — genuinely not batched into one
+    combined request. This is a disclosed, deliberate scope decision,
+    not an oversight: batching (a ReasoningPass coordinating multiple
+    modules' analyze() calls into one shared LLM request) is real,
+    separate work this sprint didn't build. See
+    app/analysis/reasoning_pass/README.md and this sprint's own
+    completion notes for the explicit flag.
     """
 
     module_name: str
     module_type: ModuleType
     metadata: dict[str, Any]
 
-    async def analyze(self, transcript: TranscriptProcessingResult) -> ModuleResult: ...
+    async def analyze(self, context: AnalysisContext) -> ModuleResult: ...

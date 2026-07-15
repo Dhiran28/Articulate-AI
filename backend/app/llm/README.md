@@ -1,13 +1,15 @@
-# LLM Abstraction Layer (Sprint 4.4)
+# LLM Abstraction Layer (Sprint 4.4, prompt metadata extended Sprint 4.5)
 
 This is `app/llm/` — the seam ADR 003 named ("app/llm/ ... depended on
 by both engines below; depends on neither") and Sprint 4.4 fully builds
-out. **It contains no vendor SDK, no API key handling, and no reasoning
-module.** Everything here is infrastructure a future reasoning module
-(Sprint 4.5+) will use — prompt loading, provider abstraction, retries,
-timeouts, response parsing, schema validation, and a typed error
-hierarchy — with zero real analysis logic and zero real provider wired
-in yet.
+out. **It still contains no vendor SDK and no API key handling.** Sprint
+4.5 is this package's first real consumer: the six reasoning modules
+under `app/analysis/modules/` (`structure.py`, `clarity.py`,
+`logical_flow.py`, `topic_drift.py`, `confidence.py`, `conciseness.py`)
+each call `LLMReasoner.reason()` — still with no vendor SDK or real
+provider wired in; those modules are tested against a fake `LLMReasoner`
+(see `tests/test_reasoning_modules.py`), the same "fake the seam" pattern
+this package's own tests use for `LLMProvider`.
 
 ## Folder structure
 
@@ -24,14 +26,19 @@ backend/app/llm/
 └── errors.py              # LLMError hierarchy
 ```
 
-Real prompt files (`structure_v1.md`, `clarity_v1.md`, `topic_drift_v1.md`,
-...) do **not** live in this package. Per ADR 003 §3, those belong to
-the Communication Intelligence Engine, under
-`app/analysis/reasoning_pass/prompts/`, once that package's reasoning
-modules actually exist. This sprint's example prompt files are test
-fixtures only (`backend/tests/fixtures/prompts/`), used to prove
-`PromptLoader`/`PromptRegistry` work — they are explicitly labeled as
-fixtures in their own file headers, not real reasoning-module content.
+Real prompt files do **not** live in this package. Per ADR 003 §3, those
+belong to the Communication Intelligence Engine, now at
+`app/analysis/reasoning_pass/prompts/analysis/` (six real files, one per
+Sprint 4.5 reasoning module — `structure_v1.md`, `clarity_v1.md`,
+`logical_flow_v1.md`, `topic_drift_v1.md`, `confidence_v1.md`,
+`conciseness_v1.md` — plus reserved-empty `prompts/coaching/` and
+`prompts/rewrite/`). This package's own `backend/tests/fixtures/prompts/`
+files remain test fixtures only, used to prove `PromptLoader`/
+`PromptRegistry` work in isolation — explicitly labeled as fixtures in
+their own file headers, not real reasoning-module content. Nothing in
+this package auto-registers the real prompts; a caller wanting them
+available calls `PromptRegistry.discover_directory(...)` against that
+real directory, same as any fixture directory in tests.
 
 ## The provider interface
 
@@ -61,7 +68,17 @@ implement for a vendor whose SDK has no JSON mode at all.
 Prompts are markdown/text files, never Python string literals:
 
 - **`PromptLoader.load(identifier, path)`** reads one file into a
-  `PromptTemplate` (`identifier`, `path`, `raw_text`).
+  `PromptTemplate` (`identifier`, `path`, `raw_text`, `metadata`).
+  **Sprint 4.5 change:** every prompt file must now open with a JSON
+  frontmatter block — `---\n{...}\n---\n` — declaring `id`, `version`,
+  `type`, `expected_output`, and `model_hints`, parsed into a
+  `PromptMetadata` pydantic model. JSON rather than YAML deliberately,
+  to avoid a new third-party dependency for a metadata shape simple
+  enough that `json.loads` plus the same pydantic validation every other
+  typed shape in this codebase already uses is sufficient. A prompt file
+  missing this block, or whose frontmatter is malformed JSON or fails
+  `PromptMetadata` validation, raises `PromptFormatError` at load time —
+  loud and immediate, not a warning or a best-effort partial load.
 - **`PromptTemplate.render(variables)`** substitutes `$variable`-style
   placeholders (Python's stdlib `string.Template`), not
   `.format()`-style `{variable}` — deliberately, since every reasoning
@@ -155,12 +172,14 @@ anything that isn't already an `LLMError` and reclassifies it as
 `LLMProviderError` — a provider implementation is never expected to know
 about this package's own error hierarchy.
 
-## What Sprint 4.4 explicitly does not include
+## What this layer still does not include, as of Sprint 4.5
 
-No concrete provider (OpenAI/Anthropic/Gemini/Ollama/local), no API
-keys, no provider-selection wiring in `app/core/dependencies.py`, and no
-reasoning module — none of the ten dimensions ADR 003 §2 lists are
-implemented against this layer yet. Real prompt files for those
-dimensions, and the modules that call `DefaultLLMReasoner.reason()` with
-them, are the next sprint's job, building on top of this one without
-changing anything here.
+Still no concrete provider (OpenAI/Anthropic/Gemini/Ollama/local), no API
+keys, and no provider-selection wiring in `app/core/dependencies.py` —
+every reasoning module built so far is tested exclusively against a fake
+`LLMReasoner`/`LLMProvider`, never a real one. Wiring in a real provider,
+and the batching mechanism ADR 003 §1 separately requires (one combined
+LLM call across the six reasoning modules, instead of six independent
+calls — see `app/analysis/README.md`'s "The batching gap" for the full,
+disclosed explanation of why Sprint 4.5 did not build this), are both
+explicitly left for a future sprint.

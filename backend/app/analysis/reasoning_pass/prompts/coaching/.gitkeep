@@ -1,0 +1,5 @@
+# Reserved for the future Coaching Engine's prompts (ADR 003 §2).
+#
+# Empty as of Sprint 4.5 — the Coaching Engine that would consume these
+# does not exist yet. This file exists only so the (otherwise empty)
+# `coaching/` directory is tracked by git.

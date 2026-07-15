@@ -20,16 +20,24 @@ class AnalysisErrorReason(str, Enum):
 
     # Set by a Metric module that validated its own required input and
     # found it unusable (e.g. duration_seconds is None, breaking a
-    # words-per-minute division). No metric module exists yet — this
-    # sprint only reserves the reason for when one does.
+    # words-per-minute division). See app/analysis/modules/speaking_pace.py.
     METRIC_INPUT_INVALID = "metric_input_invalid"
 
-    # Reserved for when reasoning modules and their LLM integration
-    # exist (a future sprint — see ADR 003 §6's "app/llm/ seam" and
-    # Sprint 4.2's explicit "no LLM code" constraint). Not raised by
-    # anything in this sprint.
+    # Sprint 4.5: the six reasoning modules translate app.llm's own,
+    # more precise error hierarchy (app/llm/errors.py) into these five
+    # values one-for-one, via each reasoning module's shared base class
+    # (modules/reasoning_base.py). Kept as a direct mapping rather than
+    # collapsing them back into one generic "LLM_MALFORMED_RESPONSE"
+    # (Sprint 4.2's placeholder value, now retired) because the whole
+    # point of app.llm's split — parsing failure vs. schema failure vs.
+    # timeout vs. provider failure — is to let a caller act differently
+    # on each; collapsing them here would throw that away one layer up.
+    LLM_TIMEOUT = "llm_timeout"
     LLM_PROVIDER_ERROR = "llm_provider_error"
-    LLM_MALFORMED_RESPONSE = "llm_malformed_response"
+    LLM_INVALID_RESPONSE = "llm_invalid_response"
+    LLM_SCHEMA_ERROR = "llm_schema_error"
+    PROMPT_NOT_FOUND = "prompt_not_found"
+    NO_PROVIDER_CONFIGURED = "no_provider_configured"
 
     # Set by the engine (not the module) when a module raised an
     # exception the engine had to catch itself, rather than the module

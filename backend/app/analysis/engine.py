@@ -1,3 +1,5 @@
+from typing import Any
+
 from app.transcript_processing.models import TranscriptProcessingResult
 
 from .errors import AnalysisError, AnalysisErrorReason
@@ -34,11 +36,23 @@ class AnalysisEngine:
         # fresh, isolated registry instead of the shared global.
         self._registry = MODULE_REGISTRY if registry is None else registry
 
-    async def run(self, transcript_id: str, transcript: TranscriptProcessingResult) -> AnalysisReport:
+    async def run(
+        self,
+        transcript_id: str,
+        transcript: TranscriptProcessingResult,
+        reasoning_context: dict[str, Any] | None = None,
+    ) -> AnalysisReport:
+        """
+        Sprint 4.5 adds the optional `reasoning_context` passthrough — an
+        open extensibility hook (see AnalysisContext in models.py) handed
+        unchanged to every module via the registry's two-phase execution.
+        Unused by any module built so far; it exists so a future caller
+        doesn't require another breaking signature change to supply it.
+        """
         self._guard_non_empty(transcript)
 
         report = AnalysisReport(transcript_id=transcript_id)
-        for result in await self._registry.execute(transcript):
+        for result in await self._registry.execute(transcript, reasoning_context=reasoning_context):
             report.modules[result.metadata.module_name] = result
 
         return report

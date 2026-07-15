@@ -21,10 +21,16 @@ never invokes an LLM.
 import re
 from typing import Any
 
-from app.transcript_processing.models import TranscriptProcessingResult
-
 from ..errors import AnalysisErrorReason
-from ..models import MetricResult, ModuleErrorDetail, ModuleResult, ModuleStatus, ModuleType, ResultMetadata
+from ..models import (
+    AnalysisContext,
+    MetricResult,
+    ModuleErrorDetail,
+    ModuleResult,
+    ModuleStatus,
+    ModuleType,
+    ResultMetadata,
+)
 
 _SENTENCE_SPLIT_PATTERN = re.compile(r"[.!?]+")
 _WORD_PATTERN = re.compile(r"[A-Za-z']+")
@@ -43,7 +49,8 @@ class SpeakingPaceModule:
             ),
         }
 
-    async def analyze(self, transcript: TranscriptProcessingResult) -> ModuleResult:
+    async def analyze(self, context: AnalysisContext) -> ModuleResult:
+        transcript = context.transcript
         duration = transcript.metadata.duration_seconds
 
         if not duration or duration <= 0:
