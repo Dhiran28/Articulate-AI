@@ -2,23 +2,25 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .errors import AnalysisErrorReason
 
 
-class ModuleCategory(str, Enum):
+class ModuleType(str, Enum):
     """
-    Which kind of judgment a module makes (ADR 003 §1/§2). A convention
-    for readability, dispatch, and error-reporting — not a constraint
-    AnalysisModule or BatchedReasoningModule enforce structurally. A
-    future module is free to be a metric-like reasoning module or
-    anything in between; this enum just needs a value for it.
+    Which kind of judgment a module makes. Sprint 4.2 scopes this to
+    exactly the two kinds a module's `analyze()` entry point can be
+    called uniformly for today: METRIC (deterministic, no LLM) and
+    REASONING (semantic judgment — no implementation exists yet, since
+    this sprint explicitly excludes LLM code). A future module that
+    blends both (e.g. ADR 003's Confidence Indicators) is still tagged
+    REASONING here; the hybrid nature is a documentation nuance, not a
+    distinct value this enum needs to carry.
     """
 
     METRIC = "metric"
     REASONING = "reasoning"
-    HYBRID = "hybrid"
 
 
 class ModuleStatus(str, Enum):
@@ -26,50 +28,107 @@ class ModuleStatus(str, Enum):
     FAILED = "failed"
 
 
-class ModuleResult(BaseModel):
+class ResultMetadata(BaseModel):
     """
-    One module's independent result. Deliberately carries evidence, not
-    advice: turning "filler words appeared at a moderate rate, here's
-    where" into "here's what to do about it" is the Coaching Engine's
-    job (ADR 003 §1/§2), not this model's. Nothing here should ever read
-    like a recommendation.
-
-    `data` holds whatever dimension-specific fields a given module
-    produces (a words-per-minute number, a structure label, a hedge
-    count...) as an open mapping rather than a fixed set of fields,
-    because this scaffolding sprint (4.2) builds no real modules yet to
-    shape it against — see registry.py. A future sprint building the
-    real modules may tighten this into a discriminated union once actual
-    per-module shapes exist to discriminate between; inventing that
-    union now, before any module needs it, would be guessing.
+    Provenance describing *where a ModuleResult came from* — kept as its
+    own schema, separate from the metric/reasoning/error payload it
+    describes, per Sprint 4.2's requirement to keep results, errors, and
+    metadata as distinct shapes rather than one loosely-typed bag.
     """
 
     module_name: str
-    category: ModuleCategory
-    status: ModuleStatus
-    data: dict[str, Any] = Field(default_factory=dict)
+    module_type: ModuleType
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    description: str | None = None
+
+
+class MetricResult(BaseModel):
+    """
+    A Metric module's successful output. Deliberately generic — no real
+    metric logic exists yet (Sprint 4.2 explicitly excludes scoring
+    logic). `details` is an open bag for whatever a future module needs;
+    `value`/`unit` are typed because "a number and what it's a number
+    of" is the one shape every metric module will plausibly share (a
+    words-per-minute figure, a count, a rate).
+    """
+
+    value: float | int | None = None
+    unit: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReasoningResult(BaseModel):
+    """
+    A Reasoning module's successful output. Deliberately generic — no
+    LLM integration exists yet (Sprint 4.2 explicitly excludes it).
+    Shaped differently from MetricResult on purpose: a reasoning
+    judgment is a label/explanation/evidence, not a value/unit — the two
+    schemas being visibly different is what "separate metric results
+    from reasoning results" (Sprint 4.2 requirement 4) actually means.
+    """
+
+    label: str | None = None
+    explanation: str | None = None
     evidence: list[dict[str, Any]] = Field(default_factory=list)
-    reason: AnalysisErrorReason | None = None
-    message: str | None = None
+
+
+class ModuleErrorDetail(BaseModel):
+    """
+    Why a module's result is `failed` — its own schema, distinct from a
+    successful metric/reasoning payload, so a caller can tell "this
+    module has no opinion because it failed" apart from "this module's
+    opinion happens to be empty" at the type level, not just by
+    convention.
+    """
+
+    reason: AnalysisErrorReason
+    message: str
+
+
+class ModuleResult(BaseModel):
+    """
+    One module's independent result (ADR 003 §1/§7): every module's
+    result carries `metadata` regardless of outcome, and exactly one of
+    `metric` / `reasoning` / `error` depending on that module's type and
+    whether it succeeded — enforced below, not just documented, so a
+    malformed result is a validation error rather than a silent
+    ambiguity a caller has to guess about.
+    """
+
+    metadata: ResultMetadata
+    status: ModuleStatus
+    metric: MetricResult | None = None
+    reasoning: ReasoningResult | None = None
+    error: ModuleErrorDetail | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_payload(self) -> "ModuleResult":
+        if self.status is ModuleStatus.FAILED:
+            if self.error is None or self.metric is not None or self.reasoning is not None:
+                raise ValueError("A failed ModuleResult must carry `error` and nothing else.")
+            return self
+
+        # status is OK
+        if self.error is not None:
+            raise ValueError("An `ok` ModuleResult must not carry `error`.")
+
+        if self.metadata.module_type is ModuleType.METRIC:
+            if self.metric is None or self.reasoning is not None:
+                raise ValueError("An `ok` METRIC ModuleResult must carry `metric` and nothing else.")
+        else:  # REASONING
+            if self.reasoning is None or self.metric is not None:
+                raise ValueError("An `ok` REASONING ModuleResult must carry `reasoning` and nothing else.")
+
+        return self
 
 
 class AnalysisReport(BaseModel):
     """
     The Communication Intelligence Engine's complete output (ADR 003
-    §1): one ModuleResult per registered module, and nothing else —
-    no ranking, no highlights, no coaching language. That synthesis is
-    the Coaching Engine's job, operating on this report as its own,
-    separate input.
-
-    Keyed by module_name (not a list) so a caller — the future API layer
-    or the Coaching Engine — can look up a specific module's result
-    directly, without depending on MODULE_REGISTRY's iteration order.
-
-    `transcript_id` is threaded in explicitly by whoever calls
-    AnalysisEngine.analyze(), not read off TranscriptProcessingResult
-    itself — that model (app/transcript_processing/models.py) has no id
-    field of its own; the caller already holds the asset id it used to
-    request transcription in the first place (see engine.py).
+    §1): one ModuleResult per registered module, keyed by module_name,
+    and nothing else — no ranking, no highlights, no coaching language.
+    That synthesis is the Coaching Engine's job over this report as its
+    own, separate input (ADR 003 §1/§2).
     """
 
     transcript_id: str

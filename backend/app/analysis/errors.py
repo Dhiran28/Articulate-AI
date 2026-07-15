@@ -7,42 +7,34 @@ class AnalysisErrorReason(str, Enum):
     pattern as AudioValidationReason (app/audio/errors.py) and
     TranscriptionErrorReason (app/transcription/errors.py).
 
-    Two of these are raised as an `AnalysisError` (a whole-request guard
-    that stops the engine before any module runs); the rest are only
-    ever set on an individual `ModuleResult` (see analysis/models.py) and
-    never raised, because one module's failure must never take down the
-    rest of the report (ADR 003 §7).
+    TRANSCRIPT_EMPTY is raised as an AnalysisError — a whole-request
+    guard that stops the engine before any module runs. Every other
+    value here is only ever set on an individual ModuleResult.error
+    (see models.py) and never raised, because one module's failure must
+    never take down the rest of the report (ADR 003 §7).
     """
 
     # Raised as AnalysisError — stops the whole request before any
     # module runs.
     TRANSCRIPT_EMPTY = "transcript_empty"
 
-    # Set on a ModuleResult by a Metric module that validated its own
-    # required input and found it unusable (e.g. duration_seconds is
-    # None, breaking a words-per-minute division).
+    # Set by a Metric module that validated its own required input and
+    # found it unusable (e.g. duration_seconds is None, breaking a
+    # words-per-minute division). No metric module exists yet — this
+    # sprint only reserves the reason for when one does.
     METRIC_INPUT_INVALID = "metric_input_invalid"
 
-    # Set on a ModuleResult by a reasoning module (or ReasoningPass, once
-    # built) that classified an LLM call as having failed outright
-    # (timeout, connection error, rate limit).
+    # Reserved for when reasoning modules and their LLM integration
+    # exist (a future sprint — see ADR 003 §6's "app/llm/ seam" and
+    # Sprint 4.2's explicit "no LLM code" constraint). Not raised by
+    # anything in this sprint.
     LLM_PROVIDER_ERROR = "llm_provider_error"
-
-    # Set on a ModuleResult when an LLM response came back but didn't
-    # match the expected structured shape. Never force-parsed or guessed
-    # at — see ADR 003 §5/§7.
     LLM_MALFORMED_RESPONSE = "llm_malformed_response"
 
-    # Set on a ModuleResult for a BatchedReasoningModule when no
-    # ReasoningPass exists to run it yet. This is Sprint 4.2's honest
-    # scaffolding gap (see engine.py) — a distinct, named reason rather
-    # than the module silently being skipped or faked.
-    REASONING_PASS_UNAVAILABLE = "reasoning_pass_unavailable"
-
-    # Set on a ModuleResult when a module raised an exception the engine
-    # had to catch itself, rather than the module classifying and
-    # reporting its own failure. A safety net, not a module's own
-    # diagnosis — see AnalysisEngine._run_module.
+    # Set by the engine (not the module) when a module raised an
+    # exception the engine had to catch itself, rather than the module
+    # classifying and reporting its own failure. A safety net, not a
+    # module's own diagnosis — see ModuleRegistry.execute / AnalysisEngine.
     MODULE_ERROR = "module_error"
 
 
