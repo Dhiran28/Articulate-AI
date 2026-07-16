@@ -139,10 +139,22 @@ class TestAnalyzeFullPipeline:
             "transcript_id",
             "generated_at",
             "executive_summary",
+            "transcript",
             "score",
             "analysis",
             "coaching",
+            "prompt_versions",
         }
+
+    def test_transcript_field_matches_what_was_actually_transcribed(self, client: TestClient) -> None:
+        # Milestone 6: the one approved, additive exception to the
+        # otherwise-frozen backend — the frontend's Transcript Viewer has
+        # no other source for this text.
+        self._configure_full_pipeline()
+
+        response = _upload_and_analyze(client)
+
+        assert response.json()["transcript"] == FAKE_TRANSCRIPT_TEXT
 
     def test_analysis_report_contains_all_ten_modules_ok(self, client: TestClient) -> None:
         self._configure_full_pipeline()

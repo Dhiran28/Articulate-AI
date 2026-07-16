@@ -58,12 +58,26 @@ class CommunicationReport(BaseModel):
       without unpacking the rest of the report.
     - `prompt_versions` (Milestone 5.1): provenance for the two LLM calls
       this report can reflect — see `PromptVersions` above.
+    - `transcript` (Milestone 6): the verbatim processed transcript text
+      (`TranscriptProcessingResult.processed_transcript.text` —
+      unmodified from Sprint 3.5's "preserve, don't clean" transcript,
+      the same text every metric/reasoning module already read). Added
+      as a scoped, explicitly-approved exception to Milestone 6's
+      otherwise-frozen backend: the frontend's Transcript Viewer has no
+      other way to obtain this text, since `/analyze` accepts audio and
+      never otherwise returns the words spoken. Purely additive — no
+      existing field, endpoint, or engine interface changed to add it;
+      `ReportBuilder.build()`'s new `transcript` parameter is required
+      (unlike `prompt_versions`, which stayed optional) since every real
+      `/analyze` response has processed a transcript by the time
+      `ReportBuilder` runs.
     """
 
     transcript_id: str
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     executive_summary: str
+    transcript: str
     score: CommunicationScore
     analysis: AnalysisReport
     coaching: CoachingReport

@@ -34,6 +34,7 @@ class TestReportBuilder:
 
         report = builder.build(
             transcript_id="t-1",
+            transcript="we should ship it",
             analysis=analysis,
             score=_score(),
             coaching=_coaching_report(),
@@ -42,6 +43,7 @@ class TestReportBuilder:
 
         assert isinstance(report, CommunicationReport)
         assert report.transcript_id == "t-1"
+        assert report.transcript == "we should ship it"
         assert report.executive_summary == "Dashboard-ready summary."
         assert report.score.overall_score == 72.5
         assert report.analysis is analysis
@@ -58,7 +60,12 @@ class TestReportBuilder:
         before_coaching = coaching.model_copy(deep=True)
 
         builder.build(
-            transcript_id="t-1", analysis=analysis, score=score, coaching=coaching, executive_summary="x"
+            transcript_id="t-1",
+            transcript="we should ship it",
+            analysis=analysis,
+            score=score,
+            coaching=coaching,
+            executive_summary="x",
         )
 
         assert analysis == before_analysis
@@ -73,6 +80,7 @@ class TestReportBuilder:
         builder = ReportBuilder()
         report = builder.build(
             transcript_id="t-1",
+            transcript="we should ship it",
             analysis=AnalysisReport(transcript_id="t-1"),
             score=_score(),
             coaching=_coaching_report(),

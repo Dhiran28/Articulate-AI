@@ -103,7 +103,10 @@ directly — a caller doesn't need to call `/api/upload` or `/transcribe`
 first — and runs the complete pipeline: transcription, the four
 deterministic metrics, the shared reasoning pass (one LLM call across
 all six reasoning dimensions), the Overall Communication Score,
-coaching (one more LLM call), and report assembly.
+coaching (one more LLM call), and report assembly. The response's
+`transcript` field (Milestone 6) is the verbatim processed transcript
+text — see ADR 004 §8 for why this one field was added after the
+backend was otherwise frozen.
 
 ```
 curl -F "file=@speech.wav" http://localhost:8000/api/analyze
@@ -116,6 +119,7 @@ Response: `201 Created`, a `CommunicationReport` (see below).
   "transcript_id": "635c56bf-d825-452c-a998-6c8ee98173c4",
   "generated_at": "2026-07-15T13:13:57.080026Z",
   "executive_summary": "A clearly structured, on-topic session with frequent filler words and mild repetition to work on.",
+  "transcript": "So, um, I think the plan is solid and we should move forward with it...",
   "prompt_versions": { "reasoning_pass": "1.0.0", "coaching": "1.0.0" },
   "score": {
     "overall_score": 77.6,

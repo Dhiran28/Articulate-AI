@@ -16,6 +16,15 @@ upload-then-transcribe flow (POST /api/upload, then POST
 full pipeline and doesn't need the intermediate audio asset or raw
 transcript on their own. Those two routes are untouched and still work
 standalone — nothing about this route changes them.
+
+Milestone 6 note: the response's `transcript` field (see
+app/reporting/models.py's `CommunicationReport`) is the one explicitly
+approved, purely additive exception to that milestone's otherwise-frozen
+backend — the frontend's Transcript Viewer has no other way to obtain
+this text. `processed_transcript.processed_transcript.text` was already
+computed here, on this exact line, before Milestone 6 existed; this only
+threads it into the final report instead of leaving it unused after
+`AnalysisEngine.run()` reads it.
 """
 
 import logging
@@ -210,6 +219,7 @@ async def analyze(
 
     report = report_builder.build(
         transcript_id=asset.id,
+        transcript=processed_transcript.processed_transcript.text,
         analysis=analysis_report,
         score=score,
         coaching=coaching_report,

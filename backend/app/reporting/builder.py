@@ -20,19 +20,27 @@ class ReportBuilder:
         self,
         *,
         transcript_id: str,
+        transcript: str,
         analysis: AnalysisReport,
         score: CommunicationScore,
         coaching: CoachingReport,
         executive_summary: str,
         prompt_versions: PromptVersions | None = None,
     ) -> CommunicationReport:
-        # Milestone 5.1: optional, defaults to "nothing known" (both
-        # fields None) rather than requiring every existing caller of
-        # this method (including every pre-5.1 test) to start supplying
-        # it — additive, not a breaking change to this builder's contract.
+        # Milestone 5.1: prompt_versions is optional, defaulting to
+        # "nothing known" (both fields None) rather than requiring every
+        # existing caller of this method to start supplying it —
+        # additive, not a breaking change to this builder's contract.
+        #
+        # Milestone 6: `transcript` is required, not optional — unlike
+        # prompt_versions, every real call site already has a processed
+        # transcript in hand by the time ReportBuilder runs (see
+        # app/api/analyze.py), so there's no legitimate "unknown"
+        # transcript state to default to.
         return CommunicationReport(
             transcript_id=transcript_id,
             executive_summary=executive_summary,
+            transcript=transcript,
             score=score,
             analysis=analysis,
             coaching=coaching,
