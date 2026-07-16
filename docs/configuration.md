@@ -17,6 +17,7 @@ cp .env.example .env
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `APP_NAME` | `Articulate AI` | Shown as the FastAPI app's title (e.g. in the auto-generated `/docs` page). Cosmetic only. |
 | `ENVIRONMENT` | `development` | Free-text label, not currently branched on anywhere. |
 | `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated list of origins allowed to call this API from a browser. |
 | `UPLOAD_TEMP_DIR` | `tmp/audio` | Where uploaded audio is written. Temporary storage — see `docs/architecture.md`'s Storage Layer notes. |

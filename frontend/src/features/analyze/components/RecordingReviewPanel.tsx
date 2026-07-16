@@ -5,6 +5,7 @@ import { RotateCcw, Trash2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatDuration } from "@/features/audio-recording/lib/formatDuration";
 import type { RecordingArtifact } from "@/features/audio-recording/types";
+import { formatBytes } from "@/lib/formatBytes";
 
 interface RecordingReviewPanelProps {
   artifact: RecordingArtifact;
@@ -12,12 +13,6 @@ interface RecordingReviewPanelProps {
   onAnalyze: () => void;
   onRecordAgain: () => void;
   onDiscard: () => void;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const kb = bytes / 1024;
-  return kb < 1024 ? `${kb.toFixed(1)} KB` : `${(kb / 1024).toFixed(1)} MB`;
 }
 
 /**

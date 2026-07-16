@@ -130,17 +130,27 @@ Response: `201 Created`, a `CommunicationReport` (see below).
     ],
     "unscored_modules": []
   },
-  "analysis": { "transcript_id": "...", "modules": { "...": "see app/analysis/README.md for the full ModuleResult shape" } },
+  "analysis": { "transcript_id": "...", "generated_at": "...", "modules": { "...": "see app/analysis/README.md for the full ModuleResult shape" } },
   "coaching": {
+    "transcript_id": "...",
+    "generated_at": "...",
     "strengths": [{ "message": "Clear structure throughout.", "based_on_module": "structure" }],
     "weaknesses": [{ "message": "Frequent filler words.", "based_on_module": "filler_words" }],
     "recommendations": [{ "message": "Pause instead of saying 'um'.", "based_on_module": "filler_words", "priority": 1 }],
     "suggested_exercises": [{ "title": "Record and review", "description": "...", "based_on_module": "filler_words" }],
     "next_practice_focus": "Reduce filler word usage.",
+    "executive_summary": "A clearly structured, on-topic session with frequent filler words and mild repetition to work on.",
     "unavailable": []
   }
 }
 ```
+
+Note: `executive_summary` appears twice in this response, for two different
+reasons — the top-level `executive_summary` is the dashboard-formatted
+version (`CommunicationSummaryGenerator`), while `coaching.executive_summary`
+is the raw text the coaching LLM call produced before that formatting step.
+The frontend only renders the top-level one; `coaching.executive_summary` is
+kept for traceability/debugging.
 
 ### Error responses
 
@@ -162,11 +172,13 @@ shape:
 | 502 | `provider_error` | Transcription | Whisper call failed. |
 | 422 | `transcript_empty` | Analysis | Fewer than 3 words transcribed. |
 | 500 | `no_scorable_modules` | Scoring | Every module failed (should not happen in practice — Metric modules have no LLM dependency). |
+| 500 | `no_scorer_for_module` | Scoring | A module is weighted but has no matching scoring function — a deployment/config bug, not a runtime condition. |
 | 422 | `nothing_to_coach` | Coaching | Every analysis module failed. |
 | 503 | `no_provider_configured` | Coaching | No `LLM_PROVIDER` configured, or its credential is missing. |
 | 502 | `llm_provider_error` / `llm_invalid_response` / `llm_schema_error` | Coaching | The LLM call failed or returned something unusable. |
 | 504 | `llm_timeout` | Coaching | The LLM call exceeded `LLM_TIMEOUT_SECONDS`. |
 | 500 | `prompt_not_found` | Coaching | Misconfigured prompt registry — a deployment bug, not a runtime condition. |
+| 500 | `internal_error` | Any | RC1 safety net (`app/main.py`'s generic exception handler): any exception not already covered by one of the specific reasons above. The response body still uses the same `{"error", "message"}` shape; the real exception is logged server-side, never included in the response. |
 
 See `docs/decisions/003-communication-intelligence-engine-architecture.md`
 and `docs/decisions/004-user-ready-backend-v1.md` for the full design

@@ -4,17 +4,12 @@ import { useEffect, useState } from "react";
 import { FileAudio, Sparkles, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { formatBytes } from "@/lib/formatBytes";
 
 interface FilePreviewPanelProps {
   file: File;
   onAnalyze: () => void;
   onChooseDifferentFile: () => void;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const kb = bytes / 1024;
-  return kb < 1024 ? `${kb.toFixed(1)} KB` : `${(kb / 1024).toFixed(1)} MB`;
 }
 
 /**

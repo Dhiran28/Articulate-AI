@@ -233,6 +233,35 @@ class TestScoringEngine:
 
         assert exc_info.value.reason == ScoringErrorReason.NO_SCORABLE_MODULES
 
+    def test_a_module_with_no_registered_scorer_raises_a_clean_scoring_error(self, monkeypatch) -> None:
+        """
+        RC1 hardening: MODULE_WEIGHTS, _METRIC_SCORERS, and
+        REASONING_LABEL_BANDS are three independently-maintained lookup
+        tables (see dimension_scores.score_module's docstring). If a
+        module is ever weighted without a matching scorer registered,
+        score_module() used to raise a bare KeyError that
+        ScoringEngine.score() didn't catch — reaching the /analyze route
+        as an unstructured 500 instead of the same clean ScoringError
+        every other whole-request scoring failure produces. This
+        simulates that drift via monkeypatch (there's no such drift in
+        the real, shipped MODULE_WEIGHTS today — see
+        test_every_weighted_module_has_a_documented_weight above) and
+        confirms the gap is now closed.
+        """
+        import app.scoring.engine as engine_module
+
+        report = _perfect_report()
+        report.modules["a_module_nobody_registered_a_scorer_for"] = _metric_result(
+            "a_module_nobody_registered_a_scorer_for", 0
+        )
+        monkeypatch.setitem(engine_module.MODULE_WEIGHTS, "a_module_nobody_registered_a_scorer_for", 5.0)
+
+        engine = ScoringEngine()
+        with pytest.raises(ScoringError) as exc_info:
+            engine.score(report)
+
+        assert exc_info.value.reason == ScoringErrorReason.NO_SCORER_FOR_MODULE
+
     def test_worst_case_report_scores_low_and_needs_work(self) -> None:
         report = AnalysisReport(transcript_id="t-1")
         report.modules["filler_words"] = _metric_result(
