@@ -26,7 +26,16 @@ class ScoringEngine:
                 unscored.append(module_name)
                 continue
 
-            score_value, driver = score_module(module_name, result)
+            try:
+                score_value, driver = score_module(module_name, result)
+            except KeyError as exc:
+                # RC1 hardening: turns a configuration-drift bug (a
+                # module_name present in MODULE_WEIGHTS but missing from
+                # score_module's own dispatch tables) into the same
+                # ScoringError shape every other scoring failure produces,
+                # instead of an uncaught KeyError reaching the /analyze
+                # route as an unstructured 500. See ScoringErrorReason.
+                raise ScoringError(ScoringErrorReason.NO_SCORER_FOR_MODULE, str(exc)) from exc
             module_scores.append(
                 ModuleScore(
                     module_name=module_name,

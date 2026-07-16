@@ -41,8 +41,26 @@ export interface ReasoningResult {
   evidence: EvidenceItem[];
 }
 
+/**
+ * Mirrors backend AnalysisErrorReason (app/analysis/errors.py) exactly —
+ * a real Pydantic enum on that side, so this is tightened to a literal
+ * union (not a bare `string`) to get the same compile-time exhaustiveness
+ * checking here that the backend gets from its own enum. RC1 audit
+ * finding: this was previously loosely typed as `string`.
+ */
+export type AnalysisErrorReason =
+  | "transcript_empty"
+  | "metric_input_invalid"
+  | "llm_timeout"
+  | "llm_provider_error"
+  | "llm_invalid_response"
+  | "llm_schema_error"
+  | "prompt_not_found"
+  | "no_provider_configured"
+  | "module_error";
+
 export interface ModuleErrorDetail {
-  reason: string;
+  reason: AnalysisErrorReason;
   message: string;
 }
 

@@ -91,6 +91,9 @@ _SCORING_REASON_TO_STATUS: dict[ScoringErrorReason, int] = {
     # missing LLM provider alone still leaves the four Metric modules
     # scorable), so this maps to 500, not a 4xx.
     ScoringErrorReason.NO_SCORABLE_MODULES: 500,
+    # Also a configuration-drift condition, not a user-facing input
+    # problem — see ScoringErrorReason.NO_SCORER_FOR_MODULE's docstring.
+    ScoringErrorReason.NO_SCORER_FOR_MODULE: 500,
 }
 
 _COACHING_REASON_TO_STATUS: dict[CoachingErrorReason, int] = {

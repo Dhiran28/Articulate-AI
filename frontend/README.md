@@ -1,36 +1,56 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Articulate AI — Frontend
 
-## Getting Started
+Next.js 15 (App Router) frontend for Articulate AI. Consumes the FastAPI
+backend's `POST /api/analyze` endpoint — see `../docs/api.md` for the full
+API contract and `../docs/architecture.md` for the system as a whole.
 
-First, run the development server:
+## Setup
 
 ```bash
+npm install
+cp .env.example .env.local
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment variables
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Variable | Default (if unset) | Meaning |
+|---|---|---|
+| `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8000` | Base URL of the FastAPI backend this app calls (see `src/lib/apiConfig.ts`). Set this to your deployed backend's URL in any non-local environment. |
 
-## Learn More
+`.env.example` documents the same variable with its default value — copy it
+to `.env.local` (Next.js's convention for local overrides, git-ignored) to
+customize.
 
-To learn more about Next.js, take a look at the following resources:
+## Pages
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `/` — product introduction, record/upload/drag-and-drop entry point.
+- `/analyze` — recording review, upload review, submission progress, and
+  error handling; routes to `/results` once analysis succeeds.
+- `/results` — executive summary, overall score, transcript, metric/reasoning/coaching
+  cards, suggested exercises.
+- `/practice` — an earlier, standalone audio-recording demo from an
+  initial sprint. Left in place and still fully functional, but
+  intentionally not linked from the main navigation — superseded by the
+  `/analyze` flow.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Testing
 
-## Deploy on Vercel
+```bash
+npm run test        # vitest run (one-shot)
+npm run test:watch  # vitest, watch mode
+npx tsc --noEmit     # typecheck
+npx eslint src --ext .ts,.tsx
+npm run build        # production build + static prerender check
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Known MVP limitation
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`src/features/results/types.ts` hand-mirrors the backend's Pydantic
+response schema rather than being generated from it (no codegen step
+exists yet). Field names and nesting are kept identical to the backend
+source specifically so the two can be diffed by eye — see that file's own
+docstring, and `docs/decisions/004-user-ready-backend-v1.md` for the
+broader context this tradeoff was made in.
