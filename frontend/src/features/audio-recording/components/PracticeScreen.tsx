@@ -1,6 +1,7 @@
 "use client";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { AudioUploadPanel } from "@/features/audio-upload/components/AudioUploadPanel";
 
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { PlaybackPanel } from "./PlaybackPanel";
@@ -33,6 +34,13 @@ import { WaveformVisualizer } from "./WaveformVisualizer";
  * 3. Otherwise, the normal recording controls and live waveform are
  *    shown, driven directly by the hook's `status`, `elapsedMs`, and
  *    `mediaStream`.
+ *
+ * AudioUploadPanel (Sprint 3.2) is rendered below as its own, separate
+ * card rather than folded into this one: uploading an existing file
+ * doesn't touch useAudioRecorder's state machine at all — it's a
+ * completely independent path to the same backend endpoint. Keeping it
+ * visually and structurally separate reflects that it's an alternative
+ * to recording, not a step in the recording flow.
  */
 export function PracticeScreen() {
   const {
@@ -53,7 +61,7 @@ export function PracticeScreen() {
   const hasFinishedRecording = status === "stopped" && artifact !== null && playbackUrl !== null;
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-6">
+    <div className="flex min-h-screen flex-col items-center justify-center gap-6 p-6">
       <Card className="w-full max-w-xl">
         <CardHeader className="items-center text-center">
           <CardTitle className="text-2xl">Practice</CardTitle>
@@ -99,6 +107,8 @@ export function PracticeScreen() {
           )}
         </CardContent>
       </Card>
+
+      <AudioUploadPanel />
     </div>
   );
 }

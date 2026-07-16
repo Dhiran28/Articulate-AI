@@ -11,14 +11,23 @@ milestone.
 
 - Browser audio recording — **implemented** (record, pause, resume, stop,
   playback, live waveform, timer, permission handling)
-- Speech transcription — not implemented
-- AI reasoning analysis — not implemented
+- Speech transcription — **implemented** (backend only; OpenAI Whisper)
+- AI reasoning analysis — **implemented** (backend only; six reasoning
+  dimensions plus four deterministic metrics, one shared LLM call — see
+  [ADR 003](docs/decisions/003-communication-intelligence-engine-architecture.md))
+- Coaching, scoring, and a unified report API — **implemented** (backend
+  only; `POST /api/analyze` — see
+  [ADR 004](docs/decisions/004-user-ready-backend-v1.md))
+- Frontend integration with the backend — not implemented (the frontend
+  still doesn't call the backend for anything; see
+  [Project status](#project-status))
 - Progress dashboard — not implemented
 - ESP32 integration — not implemented
 - Quest 3 visualization — not implemented
 
-See [Audio Recording (Practice)](#audio-recording-practice) below for what's
-built, and [Project status](#project-status) for what's next.
+See [Audio Recording (Practice)](#audio-recording-practice) below for the
+frontend, [Backend](#backend) for the API, and [Project status](#project-status)
+for what's next.
 
 ## Tech stack
 
@@ -26,6 +35,8 @@ built, and [Project status](#project-status) for what's next.
 | ---------- | -------------------------------------------- |
 | Frontend   | Next.js 15 (App Router), TypeScript, Tailwind CSS, shadcn/ui |
 | Backend    | FastAPI, Python, Uvicorn                     |
+| Transcription | OpenAI Whisper                           |
+| LLM reasoning/coaching | OpenAI, Anthropic, Google Gemini, or Ollama — configurable, see [docs/configuration.md](docs/configuration.md) |
 
 ## Repository layout
 
@@ -34,12 +45,41 @@ articulate-ai/
 ├── frontend/        Next.js app (TypeScript, Tailwind, shadcn/ui)
 ├── backend/         FastAPI service
 └── docs/
-    ├── architecture.md   design decisions and system overview
-    └── decisions/        individual architecture decision records (ADRs)
+    ├── architecture.md      design decisions and system overview
+    ├── api.md                backend API reference
+    ├── configuration.md      backend environment variables
+    ├── deployment.md         running the backend outside local dev
+    └── decisions/            individual architecture decision records (ADRs)
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the reasoning behind
 this structure.
+
+## Backend
+
+The FastAPI backend implements the full pipeline described in the
+[Planned system](#planned-system) list above: audio upload, Whisper
+transcription, a ten-dimension Communication Intelligence Engine (four
+deterministic metrics plus six LLM-reasoned dimensions via one shared
+call), an Overall Communication Score, a Coaching Engine, and one public
+endpoint — `POST /api/analyze` — that runs all of it end to end and
+returns a single JSON report.
+
+- [docs/api.md](docs/api.md) — every endpoint, request/response
+  examples, and error shapes.
+- [docs/configuration.md](docs/configuration.md) — every environment
+  variable, including LLM provider selection (OpenAI, Anthropic,
+  Gemini, or Ollama).
+- [docs/deployment.md](docs/deployment.md) — running the backend outside
+  of local development: health checks, logging, secrets, and known
+  limitations (no auth, no persistence, single-process state).
+- [ADR 002](docs/decisions/002-transcription-pipeline-architecture.md),
+  [ADR 003](docs/decisions/003-communication-intelligence-engine-architecture.md),
+  [ADR 004](docs/decisions/004-user-ready-backend-v1.md) — the
+  architectural reasoning behind each layer.
+
+The frontend does not call any of this yet — see
+[Project status](#project-status).
 
 ## Audio Recording (Practice)
 
@@ -193,9 +233,16 @@ The app is now running at http://localhost:3000.
 - The frontend and backend are independent processes with no shared build
   step. There is currently no proxy between them — the frontend does not
   yet call the backend for anything.
-- `backend/.env.example` documents the environment variables the API reads
-  (currently just `ENVIRONMENT` and `CORS_ORIGINS`). Copy it to `.env` before
-  running.
+- `backend/.env.example` documents every environment variable the API
+  reads — see [docs/configuration.md](docs/configuration.md) for the full
+  guide, including how to select and configure an LLM provider. Copy it
+  to `.env` before running.
+- Try the full pipeline directly against the backend once it's running:
+  `curl -F "file=@some-recording.wav" http://localhost:8000/api/analyze`
+  — see [docs/api.md](docs/api.md) for the response shape. Without an
+  `LLM_PROVIDER` configured, the four deterministic metrics still work;
+  reasoning and coaching require one (see
+  [docs/configuration.md](docs/configuration.md)).
 
 ## Project status
 
@@ -209,8 +256,35 @@ permissions, unsupported browsers, and unavailable microphones. See
 [Audio Recording (Practice)](#audio-recording-practice) above for details
 and known limitations.
 
-Not yet started: transcription, AI reasoning analysis, backend persistence,
-ESP32 integration, and Quest 3 integration. See
-[docs/architecture.md](docs/architecture.md) and
+**Sprint 3 (3.1–3.6) — complete, backend only.** Audio upload
+(`POST /api/upload`), OpenAI Whisper transcription
+(`POST /api/upload/{id}/transcribe`), and a Transcript Processor that
+preserves the verbatim transcript while extracting disfluency metadata.
+See [ADR 002](docs/decisions/002-transcription-pipeline-architecture.md).
+
+**Sprint 4 (4.1–4.5.1) — complete, backend only.** The Communication
+Intelligence Engine: four deterministic metric modules (filler words,
+hesitations, repetitions, speaking pace) and six LLM-reasoned dimensions
+(structure, clarity, logical flow, topic drift, confidence, conciseness),
+all six covered by one shared LLM call rather than six independent ones.
+See [ADR 003](docs/decisions/003-communication-intelligence-engine-architecture.md).
+
+**Milestone 5 — complete, backend only.** A Coaching Engine, a
+transparent weighted Overall Communication Score, and one public
+endpoint (`POST /api/analyze`) that runs the complete pipeline — audio
+in, one unified JSON report out. See
+[ADR 004](docs/decisions/004-user-ready-backend-v1.md).
+
+**Milestone 5.1 — complete, backend only.** Production-readiness for the
+backend: real LLM provider adapters (OpenAI, Anthropic, Gemini, Ollama),
+environment-based configuration for all of it, a provider health
+endpoint, structured logging, and prompt versioning surfaced in the
+final report. See [ADR 004 §7](docs/decisions/004-user-ready-backend-v1.md#7-implementation-note-milestone-51--production-backend-finalization),
+[docs/configuration.md](docs/configuration.md), and
+[docs/deployment.md](docs/deployment.md).
+
+Not yet started: frontend integration with the backend, a progress
+dashboard, backend persistence, authentication, ESP32 integration, and
+Quest 3 integration. See [docs/architecture.md](docs/architecture.md) and
 [ADR 001](docs/decisions/001-audio-recording-module-architecture.md) for
 what's intentionally deferred and why.
