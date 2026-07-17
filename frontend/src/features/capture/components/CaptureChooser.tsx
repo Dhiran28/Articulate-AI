@@ -4,6 +4,7 @@ import { useRef, useState, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Mic, UploadCloud } from "lucide-react";
 
+import { ErrorMessage } from "@/components/ErrorMessage";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -114,11 +115,7 @@ export function CaptureChooser() {
           <p className="text-xs text-muted-foreground">.wav, .mp3, .m4a, or .webm — up to 25 MB</p>
         </div>
 
-        {validationError && (
-          <p role="alert" className="text-center text-sm text-destructive">
-            {validationError}
-          </p>
-        )}
+        {validationError && <ErrorMessage message={validationError} />}
       </CardContent>
     </Card>
   );
