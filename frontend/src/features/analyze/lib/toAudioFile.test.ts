@@ -33,6 +33,19 @@ describe("recordingArtifactToFile", () => {
     expect(recordingArtifactToFile(artifact({ mimeType: 'audio/webm;codecs="opus"' })).name).toMatch(/\.webm$/);
   });
 
+  it("strips MediaRecorder codec parameters from the File's type, not just the extension", () => {
+    // Regression test: recordingArtifactToFile used to pass the raw,
+    // codec-suffixed mimeType straight through as the File's `type`,
+    // which becomes the multipart Content-Type header on upload. The
+    // backend's content-type check (app/audio/validation.py) does an
+    // exact match against plain types like "audio/webm" with no codec
+    // parameter, so a live recording's real mimeType (which always
+    // carries one, e.g. 'audio/webm;codecs="opus"') was always rejected
+    // as unsupported_format — even though the extension was correct.
+    const file = recordingArtifactToFile(artifact({ mimeType: 'audio/webm;codecs="opus"' }));
+    expect(file.type).toBe("audio/webm");
+  });
+
   it("falls back to .webm for an unrecognized mime type", () => {
     expect(recordingArtifactToFile(artifact({ mimeType: "audio/x-mystery" })).name).toMatch(/\.webm$/);
   });
